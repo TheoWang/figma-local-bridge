@@ -1,0 +1,11 @@
+{
+  "name": "Figma Local Bridge（本地设计桥）",
+  "id": "figma-local-bridge",
+  "api": "1.0.0",
+  "main": "code.js",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "devAllowedDomains": ["http://localhost:9741"]
+  }
+}

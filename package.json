@@ -1,0 +1,23 @@
+{
+  "name": "figma-local-bridge",
+  "version": "0.1.0",
+  "description": "Figma 本地插件桥：无需 Figma MCP 权限，免费账号即可通过本地中继读写 Figma 画布（渲染节点树/组件实例/导出/结构读取）",
+  "license": "MIT",
+  "main": "src/client.js",
+  "bin": {
+    "figma-bridge": "bin/cli.js"
+  },
+  "scripts": {
+    "start": "node bin/cli.js server",
+    "doctor": "node bin/cli.js doctor"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.33.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

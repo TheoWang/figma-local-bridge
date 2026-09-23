@@ -1,0 +1,22 @@
+{
+  "action": "render",
+  "params": {
+    "tree": {
+      "type": "FRAME",
+      "name": "桥接测试",
+      "fills": ["#0B1F3A"],
+      "cornerRadius": 16,
+      "layout": { "mode": "VERTICAL", "gap": 12, "padding": [32, 32, 32, 32], "counterAlign": "CENTER" },
+      "children": [
+        {
+          "type": "TEXT",
+          "text": { "characters": "Figma Local Bridge 连接成功", "fontSize": 28, "fontWeight": 700, "color": "#FFFFFF" }
+        },
+        {
+          "type": "TEXT",
+          "text": { "characters": "看到这张卡片，说明插件桥已打通。", "fontSize": 14, "color": "#C9A45C" }
+        }
+      ]
+    }
+  }
+}
