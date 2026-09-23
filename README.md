@@ -17,7 +17,7 @@ Figma 本地插件桥：**无需 Figma MCP 权限、免费账号可用**，让 A
 
 ```bash
 npm install figma-local-bridge        # 或 file: 引用本地路径
-npx figma-bridge install-plugin       # 把插件安装到 ~/.figma-local-bridge/plugin
+npx figma-bridge install-plugin       # 把插件安装到 ~/figma-local-bridge-plugin（非隐藏目录）
 ```
 
 ## 每次使用（三步）

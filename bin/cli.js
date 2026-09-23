@@ -90,7 +90,8 @@ async function cmdExport(nodeId, scale) {
 }
 
 function cmdInstallPlugin(dir) {
-  const target = dir || path.join(require('os').homedir(), '.figma-local-bridge', 'plugin');
+  // 不用隐藏目录：macOS 打开对话框默认不显示点目录，用户找 manifest 困难
+  const target = dir || path.join(require('os').homedir(), 'figma-local-bridge-plugin');
   fs.mkdirSync(target, { recursive: true });
   const src = path.join(__dirname, '..', 'plugin');
   for (const f of ['manifest.json', 'code.js']) {
