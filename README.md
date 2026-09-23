@@ -20,6 +20,8 @@ npm install figma-local-bridge        # 或 file: 引用本地路径
 npx figma-bridge install-plugin       # 把插件安装到 ~/figma-local-bridge-plugin（非隐藏目录）
 ```
 
+> 插件的完整配置步骤（导入 manifest、运行、自检、常见问题）见 **[插件安装与配置指南](docs/plugin-setup.md)**。
+
 ## 每次使用（三步）
 
 1. `npx figma-bridge server`（保持运行）
