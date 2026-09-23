@@ -3,6 +3,24 @@
   "version": "0.1.0",
   "description": "Figma 本地插件桥：无需 Figma MCP 权限，免费账号即可通过本地中继读写 Figma 画布（渲染节点树/组件实例/导出/结构读取）",
   "license": "MIT",
+  "author": "TheoWang",
+  "keywords": [
+    "figma",
+    "figma-plugin",
+    "ai-agent",
+    "design-to-code",
+    "automation",
+    "websocket",
+    "bridge"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheoWang/figma-local-bridge.git"
+  },
+  "homepage": "https://github.com/TheoWang/figma-local-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/TheoWang/figma-local-bridge/issues"
+  },
   "main": "src/client.js",
   "bin": {
     "figma-bridge": "bin/cli.js"
