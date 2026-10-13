@@ -127,7 +127,7 @@ async function main() {
   const [cmd, ...args] = process.argv.slice(2);
   switch (cmd) {
     case 'server':
-      require(path.join(__dirname, '..', 'src', 'server.js'));
+      require(path.join(__dirname, '..', 'src', 'server.js')).start();
       break;
     case 'send':
       await cmdSend(args[0]);

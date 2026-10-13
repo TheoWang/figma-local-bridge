@@ -3,7 +3,7 @@
 // 端口与中继一致（默认 9741）；如需改端口，两处同步修改。
 
 var SERVER = 'http://localhost:9741';
-var PLUGIN_VERSION = '0.1.0';
+var PLUGIN_VERSION = '0.1.1';
 var notifiedFailure = false;
 var notifiedSuccess = false;
 
@@ -195,6 +195,7 @@ async function placeImage(params) {
     node.x = params.x || 0;
     node.y = params.y || 0;
   }
+  cleanUnusedImages();
   return { nodeId: node.id, name: node.name, width: node.width, height: node.height };
 }
 
@@ -277,7 +278,17 @@ async function setImageFill(params) {
     image = figma.createImage(bytes); // 旧版同步 API 兜底
   }
   node.fills = [{ type: 'IMAGE', imageHash: image.hash, scaleMode: params.scaleMode || 'FILL' }];
+  cleanUnusedImages();
   return { nodeId: node.id, imageHash: image.hash };
+}
+
+// 清理文档中不再被任何节点引用的图片字节。只增不删会让 Figma 长时间运行后内存单调上涨；
+// 刚创建的图片已被节点引用，不会被误删。
+function cleanUnusedImages() {
+  if (typeof figma.cleanAllImages !== 'function') return;
+  Promise.resolve(figma.cleanAllImages()).catch(function (e) {
+    /* 清理失败不影响命令结果 */
+  });
 }
 
 // 原型连线：{ fromNodeId, toNodeId }（点击 from 跳转到 to）
