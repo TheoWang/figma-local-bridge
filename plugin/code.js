@@ -3,9 +3,10 @@
 // 端口与中继一致（默认 9741）；如需改端口，两处同步修改。
 
 var SERVER = 'http://localhost:9741';
-var PLUGIN_VERSION = '0.1.1';
+var PLUGIN_VERSION = '0.1.2';
 var notifiedFailure = false;
 var notifiedSuccess = false;
+var lastBootId = null; // 中继实例标识：变化即对面重启/升级了，需重新握手
 
 function sleep(ms) {
   return new Promise(function (resolve) {
@@ -17,15 +18,20 @@ async function pollLoop() {
   for (;;) {
     try {
       var res = await fetch(SERVER + '/poll');
+      var data = await res.json();
       if (!notifiedSuccess) {
         notifiedSuccess = true;
         notifiedFailure = false;
         figma.notify('Figma Local Bridge 已连接本地中继，可以接收命令了');
+      }
+      // 即使没观察到断线（中继秒重启），bootId 变化也能识别新实例并重新握手；
+      // hello 失败时 lastBootId 不更新，下一轮自然重试
+      if (data && data.relayBootId !== lastBootId) {
         await fetch(
           SERVER + '/hello?fileName=' + encodeURIComponent(figma.root.name) + '&version=' + PLUGIN_VERSION
         );
+        lastBootId = data.relayBootId;
       }
-      var data = await res.json();
       if (data && data.command) {
         await runCommand(data.command);
       }

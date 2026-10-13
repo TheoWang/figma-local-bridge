@@ -241,6 +241,40 @@ test('心跳：服务端周期 ping，健康客户端保持连接', async () => 
   }
 });
 
+test('poll 响应携带 relayBootId，中继重启（新实例）后变化', async () => {
+  const a = await startBridge();
+  await hello(a.base);
+  const p1 = await (await fetch(`${a.base}/poll`)).json();
+  assert.ok(p1.relayBootId, '空轮询响应缺少 relayBootId');
+  await a.bridge.close();
+
+  const b = await startBridge();
+  await hello(b.base);
+  const p2 = await (await fetch(`${b.base}/poll`)).json();
+  assert.ok(p2.relayBootId, '空轮询响应缺少 relayBootId');
+  assert.notEqual(p2.relayBootId, p1.relayBootId, '重启后 bootId 未变化');
+  await b.bridge.close();
+});
+
+test('命令投递响应同样携带 relayBootId', async () => {
+  const { bridge, port, base } = await startBridge();
+  try {
+    await hello(base);
+    const p = hangPoll(base);
+    const replyP = sendOne(port, { action: 'ping' });
+    const delivered = await p.done;
+    assert.ok(delivered.body.relayBootId, '命令响应缺少 relayBootId');
+    await fetch(`${base}/result`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: delivered.body.command.id, ok: true, result: {} }),
+    });
+    await replyP;
+  } finally {
+    await bridge.close();
+  }
+});
+
 test('close() 释放端口并清理定时器', async () => {
   const { bridge, port, base } = await startBridge();
   await bridge.close();

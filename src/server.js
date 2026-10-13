@@ -5,6 +5,7 @@
 
 const http = require('http');
 const path = require('path');
+const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
 const SERVER_VERSION = require(path.join(__dirname, '..', 'package.json')).version;
@@ -22,6 +23,9 @@ function createBridgeServer(options = {}) {
   const queueTtlMs = options.queueTtlMs ?? QUEUE_TTL_MS;
   const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
   const log = typeof options.logger === 'function' ? options.logger : console.log.bind(console);
+
+  // 实例标识：插件据此识别"对面的中继换实例了"（重启/升级），即使没观察到断线也重新握手
+  const bootId = crypto.randomUUID();
 
   const queue = [];                // 待执行命令 [{ id, command, cliSocket, enqueuedAt }]
   const waitingPolls = new Set();  // 挂起中的插件长轮询 { res, timer }，按挂起先后投递
@@ -75,7 +79,7 @@ function createBridgeServer(options = {}) {
       const entry = { res };
       entry.timer = setTimeout(() => {
         waitingPolls.delete(entry);
-        sendJson(res, 200, { command: null });
+        sendJson(res, 200, { command: null, relayBootId: bootId });
       }, pollHoldMs);
       waitingPolls.add(entry);
       req.on('close', () => {
@@ -116,7 +120,7 @@ function createBridgeServer(options = {}) {
       inflight.delete(item.id);
       safeSend(item.cliSocket, { id: item.id, ok: false, error: `命令超时（${commandTimeoutMs / 1000}s）` });
     }, commandTimeoutMs);
-    sendJson(res, 200, { command: { id: item.id, ...item.command } });
+    sendJson(res, 200, { command: { id: item.id, ...item.command }, relayBootId: bootId });
   }
 
   function flushQueueToPoll() {
