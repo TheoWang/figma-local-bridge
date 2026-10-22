@@ -331,6 +331,40 @@ test('未知 sessionId 的 poll 收到 sessionExpired', async () => {
   }
 });
 
+// ---------- 畸形 percent-encoding 防护（安全解码） ----------
+
+test('畸形编码：/poll?sessionId=% 返回 400 且中继仍可用', async () => {
+  const { bridge, port, base } = await startBridge();
+  try {
+    const r = await fetch(`${base}/poll?sessionId=%`);
+    assert.equal(r.status, 400);
+    const body = await r.json();
+    assert.match(body.error, /协议过旧/);
+    // 进程未崩：正常握手 + 命令链路照常工作
+    const sid = await hello(base);
+    const m = await sendOne(port, { action: '__status' });
+    assert.equal(m.ok, true);
+    assert.deepEqual(m.result.sessions.map((s) => s.sessionId), [sid]);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('畸形编码：/hello fileName 解码失败退化为 未知', async () => {
+  const { bridge, port, base } = await startBridge();
+  try {
+    const r = await fetch(`${base}/hello?fileName=%&version=x&instanceId=i`);
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.ok(body.sessionId, '畸形 fileName 不应影响握手');
+    const m = await sendOne(port, { action: '__status' });
+    assert.equal(m.ok, true);
+    assert.equal(m.result.sessions[0].fileName, '未知');
+  } finally {
+    await bridge.close();
+  }
+});
+
 // ---------- 多会话路由语义（v0.2.0 Task 2） ----------
 
 test('target 路由：发向 A 的命令不会被 B 取走', async () => {
@@ -361,6 +395,17 @@ test('无 target 且多文件在线：报错并附文件清单', async () => {
     assert.match(reply.error, /target: \{ fileKey \}/);
     assert.match(reply.error, /文件A/);
     assert.match(reply.error, /文件B/);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('无 target 且零在线：报错"插件未连接"', async () => {
+  const { bridge, port } = await startBridge();
+  try {
+    const reply = await sendOne(port, { action: 'ping' }); // 从未 hello 过任何插件
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /插件未连接/);
   } finally {
     await bridge.close();
   }
@@ -482,6 +527,24 @@ test('每会话队列上限：超出即拒', async () => {
     assert.equal(r3.ok, false);
     assert.match(r3.error, /队列已满（2）/);
     await r1; await r2; // 前两条等 TTL 驱逐，避免悬置连接
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('会话数上限：新建超限返回 503，刷新已有会话不受限', async () => {
+  const { bridge, base } = await startBridge({ sessionsMax: 2 });
+  try {
+    const sidA = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    await hello(base, { fileKey: 'fkB', fileName: '文件B', instanceId: 'iB' });
+    const r3 = await fetch(`${base}/hello?fileKey=fkC&fileName=${encodeURIComponent('文件C')}&version=x&instanceId=iC`);
+    assert.equal(r3.status, 503);
+    const body3 = await r3.json();
+    assert.equal(body3.ok, false);
+    assert.match(body3.error, /会话数已达上限（2）/);
+    // 刷新已有 sessionId（同 fileKey+instanceId 再 hello）不应受上限约束
+    const sidA2 = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    assert.equal(sidA2, sidA);
   } finally {
     await bridge.close();
   }

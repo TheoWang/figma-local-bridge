@@ -30,6 +30,18 @@ function queryOf(url) {
   return out;
 }
 
+// 查询串值安全解码：插件与 CLI 拼接的编码可信，但端口是本机开放的，任何来源的畸形
+// 编码（如 `%`）都不能炸掉整个中继进程——解码失败按"无此参数"处理。
+function safeDecode(v) {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return null;
+  }
+}
+
+const SESSIONS_MAX = 64;              // 会话总数上限：90s 驱逐窗口内防恶意 hello 制造无界增长
+
 function createBridgeServer(options = {}) {
   const defaultPort = options.port ?? 0; // 缺省 ephemeral 端口，生产入口 start() 传入 PORT
   const pollHoldMs = options.pollHoldMs ?? POLL_HOLD_MS;
@@ -38,6 +50,7 @@ function createBridgeServer(options = {}) {
   const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
   const sessionEvictMs = options.sessionEvictMs ?? SESSION_EVICT_MS;
   const sessionQueueMax = options.sessionQueueMax ?? SESSION_QUEUE_MAX;
+  const sessionsMax = options.sessionsMax ?? SESSIONS_MAX;
   const log = typeof options.logger === 'function' ? options.logger : console.log.bind(console);
 
   // 实例标识：插件据此识别"对面的中继换实例了"（重启/升级），即使没观察到断线也重新握手
@@ -133,8 +146,9 @@ function createBridgeServer(options = {}) {
 
     if (req.method === 'GET' && req.url.startsWith('/hello')) {
       const q = queryOf(req.url);
-      const fileName = decodeURIComponent(q.fileName || '未知');
-      const fileKey = q.fileKey ? decodeURIComponent(q.fileKey) : `name:${fileName}`;
+      // 解码失败（畸形编码）退化为兜底值：fileName → '未知'，fileKey → 按"无 fileKey"走 name:<fileName>
+      const fileName = (q.fileName ? safeDecode(q.fileName) : null) || '未知';
+      const fileKey = (q.fileKey ? safeDecode(q.fileKey) : null) || `name:${fileName}`;
       const instanceId = q.instanceId || 'anon';
       const version = q.version || '未知';
       const sessionId = `${fileKey}:${instanceId}`;
@@ -146,6 +160,10 @@ function createBridgeServer(options = {}) {
         existing.seenAt = now;
         existing.registeredAt = now;
       } else {
+        // 会话数上限（内存防护）：只限新建，刷新已有 sessionId 不受限
+        if (sessions.size >= sessionsMax) {
+          return sendJson(res, 503, { ok: false, error: `会话数已达上限（${sessionsMax}），请关闭多余的插件实例` });
+        }
         sessions.set(sessionId, {
           sessionId, fileKey, fileName, instanceId, version,
           seenAt: now, registeredAt: now, waitingPoll: null, queue: [],
@@ -158,7 +176,7 @@ function createBridgeServer(options = {}) {
 
     if (req.method === 'GET' && req.url.startsWith('/poll')) {
       const q = queryOf(req.url);
-      const sid = q.sessionId ? decodeURIComponent(q.sessionId) : null;
+      const sid = q.sessionId ? safeDecode(q.sessionId) : null;
       if (!sid) {
         return sendJson(res, 400, { ok: false, error: '协议过旧：请升级插件到 0.2.0（重新 install-plugin 并在 Figma 中重启插件）' });
       }

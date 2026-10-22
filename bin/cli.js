@@ -86,7 +86,11 @@ async function resolveFileKey(selector) {
   const reply = await sendOne({ action: '__status' }, { allowOffline: true });
   const sessions = ((reply.result && reply.result.sessions) || []).filter((s) => s.alive);
   const exact = sessions.filter((s) => s.fileKey === selector);
-  if (exact.length === 1) return exact[0].fileKey;
+  if (exact.length >= 1) {
+    // 该 fileKey 有活会话即投递：多个会话时取最近活跃（对齐中继 pickTargetSession 路由语义）
+    exact.sort((a, b) => new Date(b.lastSeenAt || 0) - new Date(a.lastSeenAt || 0));
+    return exact[0].fileKey;
+  }
   const lower = String(selector).toLowerCase();
   const fuzzy = sessions.filter((s) => (s.fileName || '').toLowerCase().includes(lower));
   if (fuzzy.length === 1) return fuzzy[0].fileKey;

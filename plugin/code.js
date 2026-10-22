@@ -25,7 +25,8 @@ async function hello() {
       '&instanceId=' + instanceId,
   );
   var data = await res.json();
-  if (data && data.sessionId) sessionId = data.sessionId;
+  if (!(data && data.sessionId)) throw new Error('握手未获 sessionId（中继版本过旧？）');
+  sessionId = data.sessionId;
 }
 
 async function pollLoop() {

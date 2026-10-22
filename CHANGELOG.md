@@ -10,6 +10,9 @@
 - CLI：新增 list-files；send/render/export 支持 --file <fileKey 或文件名唯一子串>；doctor 逐文件检查版本一致性
 - 插件：hello/poll/result 携带会话标识，sessionExpired 或 relayBootId 变化自动重握手
 - 升级动作：`figma-bridge install-plugin` 后重启插件；doctor 可验证
+- 中继：查询串安全解码（畸形编码返回 400，不再可能崩溃进程）；会话数上限（64）防异常堆积
+- CLI：--file 精确 fileKey 命中多个会话时投递最近活跃会话（对齐中继路由语义）
+- 插件：握手未获 sessionId（如对接旧版本中继）时退避重试，不再热循环
 
 ## 0.1.2（2026-10-13）
 
