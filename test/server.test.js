@@ -397,3 +397,26 @@ test('同 fileKey 多实例：路由到最近注册的会话', async () => {
     await bridge.close();
   }
 });
+
+test('/result 的 sessionId 不符时被丢弃，CLI 按超时处理', async () => {
+  const { bridge, port, base } = await startBridge();
+  try {
+    const sid = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    const p = hangPoll(base, sid);
+    const t0 = Date.now();
+    const replyP = sendOne(port, { action: 'ping' });
+    const delivered = await p.done;
+    // 伪造别的 sessionId 回结果：应被丢弃，CLI 走 commandTimeoutMs 超时
+    await fetch(`${base}/result`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: delivered.body.command.id, sessionId: 'fkA:evil', ok: true, result: { forged: true } }),
+    });
+    const reply = await replyP;
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /超时/);
+    assert.ok(Date.now() - t0 >= 550, `过快返回：${Date.now() - t0}ms`);
+  } finally {
+    await bridge.close();
+  }
+});
