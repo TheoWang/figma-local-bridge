@@ -15,6 +15,20 @@ const POLL_HOLD_MS = 25 * 1000;        // 长轮询挂起上限，空转后插�
 const QUEUE_TTL_MS = 60 * 1000;        // 队列条目未被插件取走的存活期（与 CLI 侧 70s 超时对齐）
 const QUEUE_SWEEP_MS = 15 * 1000;      // 队列 TTL 扫描周期
 const HEARTBEAT_MS = 30 * 1000;        // WS 心跳周期；两轮无 pong 判定半开连接并断开
+const SESSION_EVICT_MS = 90 * 1000;    // Task 4 接线，本任务先定义
+const SESSION_QUEUE_MAX = 50;          // Task 4 接线
+
+// 查询串解析：插件侧只用原生 fetch 拼简单查询串，不值得为它引入 URL/URLSearchParams 依赖
+function queryOf(url) {
+  const out = {};
+  const i = url.indexOf('?');
+  if (i < 0) return out;
+  for (const pair of url.slice(i + 1).split('&')) {
+    const eq = pair.indexOf('=');
+    if (eq > 0) out[pair.slice(0, eq)] = pair.slice(eq + 1);
+  }
+  return out;
+}
 
 function createBridgeServer(options = {}) {
   const defaultPort = options.port ?? 0; // 缺省 ephemeral 端口，生产入口 start() 传入 PORT
@@ -27,27 +41,54 @@ function createBridgeServer(options = {}) {
   // 实例标识：插件据此识别"对面的中继换实例了"（重启/升级），即使没观察到断线也重新握手
   const bootId = crypto.randomUUID();
 
-  const queue = [];                // 待执行命令 [{ id, command, cliSocket, enqueuedAt }]
-  const waitingPolls = new Set();  // 挂起中的插件长轮询 { res, timer }，按挂起先后投递
-  const inflight = new Map();      // id -> { cliSocket, timer }（已发给插件、等结果的命令）
-  const state = { pluginSeenAt: 0, pluginVersion: null, pluginFileName: null };
+  const sessions = new Map();   // sessionId -> session（形状见 Interfaces）
+  const inflight = new Map();   // id -> { id, command, cliSocket, enqueuedAt, sessionId, timer }
   let nextId = 1;
   let heartbeatTimer = null;
-
-  const pluginAlive = () => Date.now() - state.pluginSeenAt < pollHoldMs + 10000;
 
   const currentPort = () => {
     const addr = server.address();
     return addr && typeof addr === 'object' ? addr.port : null;
   };
 
-  // 队列 TTL：插件失联前入队的命令不能永久滞留（连同 cliSocket 引用）
+  const aliveSessions = () => {
+    const now = Date.now();
+    return [...sessions.values()].filter((s) => now - s.seenAt < pollHoldMs + 10000);
+  };
+
+  const describeSessions = (list) =>
+    list.length ? list.map((s) => `${s.fileName}（fileKey: ${s.fileKey}）`).join('、') : '（无）';
+
+  const pickTargetSession = (command) => {
+    const alive = aliveSessions();
+    const fileKey = command.target && command.target.fileKey;
+    if (fileKey) {
+      const matches = alive
+        .filter((s) => s.fileKey === fileKey)
+        .sort((a, b) => b.registeredAt - a.registeredAt);
+      if (!matches.length) {
+        return { error: `目标文件不在线（fileKey: ${fileKey}）。在线文件：${describeSessions(alive)}` };
+      }
+      return { session: matches[0] };
+    }
+    if (alive.length === 0) {
+      return { error: 'Figma 插件未连接：请先在 Figma 中运行「Figma Local Bridge」插件并保持打开' };
+    }
+    if (alive.length > 1) {
+      return { error: `多个文件在线（${describeSessions(alive)}），请在命令中携带 target: { fileKey } 指定目标` };
+    }
+    return { session: alive[0] };
+  };
+
+  // 队列 TTL：插件失联前入队的命令不能永久滞留（连同 cliSocket 引用）；按会话各自的队列扫描
   const queueSweeper = queueTtlMs > 0
     ? setInterval(() => {
         const deadline = Date.now() - queueTtlMs;
-        while (queue.length && queue[0].enqueuedAt <= deadline) {
-          const item = queue.shift();
-          safeSend(item.cliSocket, { id: item.id, ok: false, error: `命令超时（${queueTtlMs / 1000}s 未被插件取走）` });
+        for (const session of sessions.values()) {
+          while (session.queue.length && session.queue[0].enqueuedAt <= deadline) {
+            const item = session.queue.shift();
+            safeSend(item.cliSocket, { id: item.id, ok: false, error: `命令超时（${queueTtlMs / 1000}s 未被插件取走）` });
+          }
         }
       }, Math.min(QUEUE_SWEEP_MS, queueTtlMs / 2))
     : null;
@@ -63,28 +104,53 @@ function createBridgeServer(options = {}) {
     }
 
     if (req.method === 'GET' && req.url.startsWith('/hello')) {
-      state.pluginSeenAt = Date.now();
-      state.pluginFileName = decodeURIComponent((req.url.match(/[?&]fileName=([^&]*)/) || [])[1] || '未知');
-      state.pluginVersion = (req.url.match(/[?&]version=([^&]*)/) || [])[1] || '未知';
-      const mismatch = state.pluginVersion !== '未知' && state.pluginVersion !== SERVER_VERSION;
-      log(`[中继] Figma 插件已上线（文件：${state.pluginFileName}，插件 v${state.pluginVersion}）${mismatch ? ` ⚠️ 与中继 v${SERVER_VERSION} 版本不一致，请重新导入插件` : ''}`);
-      return sendJson(res, 200, { ok: true });
+      const q = queryOf(req.url);
+      const fileName = decodeURIComponent(q.fileName || '未知');
+      const fileKey = q.fileKey ? decodeURIComponent(q.fileKey) : `name:${fileName}`;
+      const instanceId = q.instanceId || 'anon';
+      const version = q.version || '未知';
+      const sessionId = `${fileKey}:${instanceId}`;
+      const now = Date.now();
+      const existing = sessions.get(sessionId);
+      if (existing) {
+        existing.fileName = fileName;
+        existing.version = version;
+        existing.seenAt = now;
+        existing.registeredAt = now;
+      } else {
+        sessions.set(sessionId, {
+          sessionId, fileKey, fileName, instanceId, version,
+          seenAt: now, registeredAt: now, waitingPoll: null, queue: [],
+        });
+      }
+      const mismatch = version !== '未知' && version !== SERVER_VERSION;
+      log(`[中继] Figma 插件已上线（文件：${fileName}，fileKey: ${fileKey}，插件 v${version}）${mismatch ? ` ⚠️ 与中继 v${SERVER_VERSION} 版本不一致，请重新导入插件` : ''}`);
+      return sendJson(res, 200, { ok: true, sessionId, relayBootId: bootId });
     }
 
-    if (req.method === 'GET' && req.url === '/poll') {
-      state.pluginSeenAt = Date.now();
-      const item = queue.shift();
+    if (req.method === 'GET' && req.url.startsWith('/poll')) {
+      const q = queryOf(req.url);
+      const sid = q.sessionId ? decodeURIComponent(q.sessionId) : null;
+      if (!sid) {
+        return sendJson(res, 400, { ok: false, error: '协议过旧：请升级插件到 0.2.0（重新 install-plugin 并在 Figma 中重启插件）' });
+      }
+      const session = sessions.get(sid);
+      if (!session) {
+        return sendJson(res, 200, { command: null, sessionExpired: true, relayBootId: bootId });
+      }
+      session.seenAt = Date.now();
+      const item = session.queue.shift();
       if (item) return deliverToPlugin(res, item);
-      // 没有命令：挂起等待，最多 pollHoldMs；各 poll 独立登记，互不覆盖
+      // 没有命令：挂起等待。每会话至多一个挂起 poll（插件串行轮询）。
       const entry = { res };
       entry.timer = setTimeout(() => {
-        waitingPolls.delete(entry);
+        if (session.waitingPoll === entry) session.waitingPoll = null;
         sendJson(res, 200, { command: null, relayBootId: bootId });
       }, pollHoldMs);
-      waitingPolls.add(entry);
+      session.waitingPoll = entry;
       req.on('close', () => {
         clearTimeout(entry.timer);
-        waitingPolls.delete(entry);
+        if (session.waitingPoll === entry) session.waitingPoll = null;
       });
       return;
     }
@@ -93,15 +159,16 @@ function createBridgeServer(options = {}) {
       let body = '';
       req.on('data', (c) => (body += c));
       req.on('end', () => {
-        state.pluginSeenAt = Date.now();
         let msg;
         try {
           msg = JSON.parse(body);
         } catch {
           return sendJson(res, 400, { ok: false });
         }
+        const session = msg.sessionId && sessions.get(msg.sessionId);
+        if (session) session.seenAt = Date.now();
         const item = inflight.get(msg.id);
-        if (item) {
+        if (item && item.sessionId === msg.sessionId) {
           inflight.delete(msg.id);
           clearTimeout(item.timer);
           safeSend(item.cliSocket, { id: msg.id, ok: msg.ok, result: msg.result, error: msg.error });
@@ -121,16 +188,6 @@ function createBridgeServer(options = {}) {
       safeSend(item.cliSocket, { id: item.id, ok: false, error: `命令超时（${commandTimeoutMs / 1000}s）` });
     }, commandTimeoutMs);
     sendJson(res, 200, { command: { id: item.id, ...item.command }, relayBootId: bootId });
-  }
-
-  function flushQueueToPoll() {
-    if (!queue.length) return;
-    for (const entry of waitingPolls) {
-      waitingPolls.delete(entry);
-      clearTimeout(entry.timer);
-      deliverToPlugin(entry.res, queue.shift());
-      return;
-    }
   }
 
   function setCors(res) {
@@ -173,27 +230,42 @@ function createBridgeServer(options = {}) {
         const id = nextId++;
         // __status 由中继直接应答，不转发插件（doctor 用）
         if (msg.command.action === '__status') {
+          const now = Date.now();
           safeSend(socket, {
             id,
             ok: true,
             result: {
               serverVersion: SERVER_VERSION,
               port: currentPort(),
-              pluginAlive: pluginAlive(),
-              pluginVersion: state.pluginVersion,
-              pluginFileName: state.pluginFileName,
-              pluginLastSeenAt: state.pluginSeenAt ? new Date(state.pluginSeenAt).toISOString() : null,
-              queuedCommands: queue.length
-            }
+              pluginAlive: aliveSessions().length > 0,
+              sessions: [...sessions.values()].map((s) => ({
+                sessionId: s.sessionId,
+                fileKey: s.fileKey,
+                fileName: s.fileName,
+                pluginVersion: s.version,
+                lastSeenAt: s.seenAt ? new Date(s.seenAt).toISOString() : null,
+                alive: now - s.seenAt < pollHoldMs + 10000,
+                queuedCommands: s.queue.length,
+              })),
+            },
           });
           return;
         }
-        if (!pluginAlive()) {
-          safeSend(socket, { id, ok: false, error: 'Figma 插件未连接：请先在 Figma 中运行「Figma Local Bridge」插件并保持打开' });
+        const picked = pickTargetSession(msg.command);
+        if (picked.error) {
+          safeSend(socket, { id, ok: false, error: picked.error });
           return;
         }
-        queue.push({ id, command: msg.command, cliSocket: socket, enqueuedAt: Date.now() });
-        flushQueueToPoll();
+        const session = picked.session;
+        const item = { id, command: msg.command, cliSocket: socket, enqueuedAt: Date.now(), sessionId: session.sessionId };
+        if (session.waitingPoll) {
+          const entry = session.waitingPoll;
+          session.waitingPoll = null;
+          clearTimeout(entry.timer);
+          deliverToPlugin(entry.res, item);
+        } else {
+          session.queue.push(item);
+        }
         return;
       }
     });
@@ -225,11 +297,14 @@ function createBridgeServer(options = {}) {
     async close() {
       if (queueSweeper) clearInterval(queueSweeper);
       if (heartbeatTimer) clearInterval(heartbeatTimer);
-      for (const entry of waitingPolls) clearTimeout(entry.timer);
-      waitingPolls.clear();
+      for (const session of sessions.values()) {
+        if (session.waitingPoll) clearTimeout(session.waitingPoll.timer);
+        session.waitingPoll = null;
+        session.queue.length = 0;
+      }
+      sessions.clear();
       for (const item of inflight.values()) clearTimeout(item.timer);
       inflight.clear();
-      queue.length = 0;
       for (const socket of wss.clients) socket.terminate();
       await new Promise((resolve) => wss.close(() => resolve()));
       if (typeof server.closeAllConnections === 'function') server.closeAllConnections();

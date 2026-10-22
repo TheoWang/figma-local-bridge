@@ -26,9 +26,12 @@ async function startBridge(opts = {}) {
   return { bridge, port: bridge.port, base: `http://127.0.0.1:${bridge.port}` };
 }
 
-async function hello(base) {
-  const r = await fetch(`${base}/hello?fileName=${encodeURIComponent('测试文件')}&version=0.0.0-test`);
+async function hello(base, { fileKey = 'testFileKey', fileName = '测试文件', instanceId = 'inst1', version = '0.0.0-test' } = {}) {
+  const r = await fetch(`${base}/hello?fileKey=${encodeURIComponent(fileKey)}&fileName=${encodeURIComponent(fileName)}&version=${version}&instanceId=${instanceId}`);
   assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.ok(body.sessionId, 'hello 响应缺 sessionId');
+  return body.sessionId;
 }
 
 // 与 src/client.js 相同模式的一条 WS 命令
@@ -46,28 +49,28 @@ function sendOne(port, command, timeoutMs = 5000) {
 }
 
 // 单次挂起的 /poll（不自动应答），abort() 模拟插件侧连接中断
-function hangPoll(base) {
+function hangPoll(base, sessionId) {
   const ac = new AbortController();
-  const done = fetch(`${base}/poll`, { signal: ac.signal })
+  const done = fetch(`${base}/poll?sessionId=${encodeURIComponent(sessionId)}`, { signal: ac.signal })
     .then(async (r) => ({ status: r.status, body: await r.json() }));
   return { done, abort: () => ac.abort() };
 }
 
 // 自动应答型 poller（模拟插件循环）：收到命令就 POST 一个小结果
-function autoPoller(base) {
+function autoPoller(base, sessionId) {
   const commands = [];
   let stopped = false;
   (async () => {
     while (!stopped) {
       try {
-        const r = await fetch(`${base}/poll`);
+        const r = await fetch(`${base}/poll?sessionId=${encodeURIComponent(sessionId)}`);
         const body = await r.json();
         if (body && body.command) {
           commands.push(body.command);
           await fetch(`${base}/result`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: body.command.id, ok: true, result: { ack: body.command.action } }),
+            body: JSON.stringify({ id: body.command.id, sessionId, ok: true, result: { ack: body.command.action } }),
           });
         }
       } catch {
@@ -98,7 +101,7 @@ test('__status：hello 后插件在线、端口正确', async () => {
     assert.equal(m.ok, true);
     assert.equal(m.result.port, port);
     assert.equal(m.result.pluginAlive, true);
-    assert.equal(m.result.pluginFileName, '测试文件');
+    assert.equal(m.result.sessions[0].fileName, '测试文件');
   } finally {
     await bridge.close();
   }
@@ -107,15 +110,15 @@ test('__status：hello 后插件在线、端口正确', async () => {
 test('命令投递：poller 收到命令，CLI 收到结果', async () => {
   const { bridge, port, base } = await startBridge();
   try {
-    await hello(base);
-    const p = hangPoll(base);
+    const sid = await hello(base);
+    const p = hangPoll(base, sid);
     const replyP = sendOne(port, { action: 'ping' });
     const delivered = await p.done;
     assert.equal(delivered.body.command.action, 'ping');
     await fetch(`${base}/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: delivered.body.command.id, ok: true, result: { pong: true } }),
+      body: JSON.stringify({ id: delivered.body.command.id, sessionId: sid, ok: true, result: { pong: true } }),
     });
     const reply = await replyP;
     assert.equal(reply.ok, true);
@@ -128,8 +131,8 @@ test('命令投递：poller 收到命令，CLI 收到结果', async () => {
 test('执行超时：插件不回结果时 CLI 在 commandTimeoutMs 后收到失败', async () => {
   const { bridge, port, base } = await startBridge();
   try {
-    await hello(base);
-    const p = hangPoll(base); // 收到命令但永不回结果
+    const sid = await hello(base);
+    const p = hangPoll(base, sid); // 收到命令但永不回结果
     const t0 = Date.now();
     const reply = await sendOne(port, { action: 'ping' });
     await p.done;
@@ -159,9 +162,9 @@ test('队列 TTL：插件不来取，命令在 queueTtlMs 后被驱逐并答复 
 test('双 poller：3 条命令各送达一次，服务保持健康', async () => {
   const { bridge, port, base } = await startBridge();
   try {
-    await hello(base);
-    const a = autoPoller(base);
-    const b = autoPoller(base);
+    const sid = await hello(base);
+    const a = autoPoller(base, sid);
+    const b = autoPoller(base, sid);
     for (let i = 0; i < 3; i++) {
       const reply = await sendOne(port, { action: 'ping', i });
       assert.equal(reply.ok, true, `第 ${i} 条命令失败`);
@@ -180,11 +183,11 @@ test('孤儿 poll：A 中断后其挂起 timer 不应清掉 B 的注册（命令
   const { bridge, port, base } = await startBridge();
   const cap = captureUncaught();
   try {
-    await hello(base);
-    const a = hangPoll(base);
+    const sid = await hello(base);
+    const a = hangPoll(base, sid);
     a.done.catch(() => {}); // abort 是预期行为，吞掉 AbortError 避免 unhandled rejection
     await sleep(FAST.pollHoldMs / 2);
-    const b = hangPoll(base);
+    const b = hangPoll(base, sid);
     await sleep(40);
     a.abort(); // A 断开；其 timer 不应影响 B
     // 等过 A 原始 timer 的触发点（t0+hold），但早于 B 自己的 timer（t0+0.5hold+hold）
@@ -195,7 +198,7 @@ test('孤儿 poll：A 中断后其挂起 timer 不应清掉 B 的注册（命令
     await fetch(`${base}/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: delivered.body.command.id, ok: true, result: { pong: true } }),
+      body: JSON.stringify({ id: delivered.body.command.id, sessionId: sid, ok: true, result: { pong: true } }),
     });
     const reply = await replyP;
     assert.equal(reply.ok, true);
@@ -243,14 +246,14 @@ test('心跳：服务端周期 ping，健康客户端保持连接', async () => 
 
 test('poll 响应携带 relayBootId，中继重启（新实例）后变化', async () => {
   const a = await startBridge();
-  await hello(a.base);
-  const p1 = await (await fetch(`${a.base}/poll`)).json();
+  const sidA = await hello(a.base);
+  const p1 = await (await fetch(`${a.base}/poll?sessionId=${sidA}`)).json();
   assert.ok(p1.relayBootId, '空轮询响应缺少 relayBootId');
   await a.bridge.close();
 
   const b = await startBridge();
-  await hello(b.base);
-  const p2 = await (await fetch(`${b.base}/poll`)).json();
+  const sidB = await hello(b.base);
+  const p2 = await (await fetch(`${b.base}/poll?sessionId=${sidB}`)).json();
   assert.ok(p2.relayBootId, '空轮询响应缺少 relayBootId');
   assert.notEqual(p2.relayBootId, p1.relayBootId, '重启后 bootId 未变化');
   await b.bridge.close();
@@ -259,15 +262,15 @@ test('poll 响应携带 relayBootId，中继重启（新实例）后变化', asy
 test('命令投递响应同样携带 relayBootId', async () => {
   const { bridge, port, base } = await startBridge();
   try {
-    await hello(base);
-    const p = hangPoll(base);
+    const sid = await hello(base);
+    const p = hangPoll(base, sid);
     const replyP = sendOne(port, { action: 'ping' });
     const delivered = await p.done;
     assert.ok(delivered.body.relayBootId, '命令响应缺少 relayBootId');
     await fetch(`${base}/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: delivered.body.command.id, ok: true, result: {} }),
+      body: JSON.stringify({ id: delivered.body.command.id, sessionId: sid, ok: true, result: {} }),
     });
     await replyP;
   } finally {
@@ -280,4 +283,50 @@ test('close() 释放端口并清理定时器', async () => {
   await bridge.close();
   await assert.rejects(fetch(`${base}/hello`), undefined, '端口未释放');
   assert.notEqual(port, undefined);
+});
+
+test('hello 注册会话：__status 的 sessions 含 fileKey/fileName/alive', async () => {
+  const { bridge, port, base } = await startBridge();
+  try {
+    const sid = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'i1' });
+    assert.equal(sid, 'fkA:i1');
+    const m = await sendOne(port, { action: '__status' });
+    assert.equal(m.ok, true);
+    assert.equal(m.result.pluginAlive, true);
+    assert.equal(m.result.sessions.length, 1);
+    const s = m.result.sessions[0];
+    assert.equal(s.sessionId, 'fkA:i1');
+    assert.equal(s.fileKey, 'fkA');
+    assert.equal(s.fileName, '文件A');
+    assert.equal(s.alive, true);
+    assert.equal(s.queuedCommands, 0);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('poll 缺 sessionId 返回 400（旧协议拒绝）', async () => {
+  const { bridge, base } = await startBridge();
+  try {
+    const r = await fetch(`${base}/poll`);
+    assert.equal(r.status, 400);
+    const body = await r.json();
+    assert.match(body.error, /协议过旧/);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('未知 sessionId 的 poll 收到 sessionExpired', async () => {
+  const { bridge, base } = await startBridge();
+  try {
+    const r = await fetch(`${base}/poll?sessionId=nope:x`);
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.sessionExpired, true);
+    assert.equal(body.command, null);
+    assert.ok(body.relayBootId);
+  } finally {
+    await bridge.close();
+  }
 });
