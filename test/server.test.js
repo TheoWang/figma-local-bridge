@@ -330,3 +330,70 @@ test('未知 sessionId 的 poll 收到 sessionExpired', async () => {
     await bridge.close();
   }
 });
+
+// ---------- 多会话路由语义（v0.2.0 Task 2） ----------
+
+test('target 路由：发向 A 的命令不会被 B 取走', async () => {
+  const { bridge, port, base } = await startBridge();
+  try {
+    const sidA = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    const sidB = await hello(base, { fileKey: 'fkB', fileName: '文件B', instanceId: 'iB' });
+    const a = autoPoller(base, sidA);
+    const b = autoPoller(base, sidB);
+    const reply = await sendOne(port, { action: 'ping', target: { fileKey: 'fkA' } });
+    assert.equal(reply.ok, true);
+    await sleep(100);
+    assert.equal(a.commands.length, 1);
+    assert.equal(b.commands.length, 0, 'B 不应收到命令');
+    a.stop(); b.stop();
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('无 target 且多文件在线：报错并附文件清单', async () => {
+  const { bridge, port, base } = await startBridge();
+  try {
+    await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    await hello(base, { fileKey: 'fkB', fileName: '文件B', instanceId: 'iB' });
+    const reply = await sendOne(port, { action: 'ping' });
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /target: \{ fileKey \}/);
+    assert.match(reply.error, /文件A/);
+    assert.match(reply.error, /文件B/);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('target 文件不在线：报错并附在线清单', async () => {
+  const { bridge, port, base } = await startBridge();
+  try {
+    await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    const reply = await sendOne(port, { action: 'ping', target: { fileKey: 'fkGhost' } });
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /不在线/);
+    assert.match(reply.error, /文件A/);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('同 fileKey 多实例：路由到最近注册的会话', async () => {
+  const { bridge, port, base } = await startBridge();
+  try {
+    const sid1 = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'i1' });
+    await sleep(30);
+    const sid2 = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'i2' });
+    const p1 = autoPoller(base, sid1);
+    const p2 = autoPoller(base, sid2);
+    const reply = await sendOne(port, { action: 'ping', target: { fileKey: 'fkA' } });
+    assert.equal(reply.ok, true);
+    await sleep(100);
+    assert.equal(p2.commands.length, 1, '应投递给最近注册的实例 i2');
+    assert.equal(p1.commands.length, 0);
+    p1.stop(); p2.stop();
+  } finally {
+    await bridge.close();
+  }
+});
