@@ -36,6 +36,7 @@ npx figma-bridge install-plugin       # 把插件安装到 ~/figma-local-bridge-
 npx figma-bridge server                    # 起中继
 npx figma-bridge render examples/hello.json  # 渲染节点树文件
 npx figma-bridge send '{"action":"ping"}'  # 发任意命令
+npx figma-bridge send --file 首页 '{"action":"ping"}'   # 向指定文件发命令（选择器为 fileKey 或文件名唯一子串）
 npx figma-bridge export 123:456 2          # 导出节点为 PNG 到 ./exports/
 npx figma-bridge list-files                # 列出在线文件（fileKey/文件名/版本/排队数）
 npx figma-bridge install-plugin            # 安装/更新插件文件
