@@ -5,6 +5,7 @@
 //   send '<json>' | send @file    发送一条命令并打印结果
 //   render <file.json>            渲染节点树文件（send @file 的别名）
 //   export <nodeId> [scale]       导出节点为 PNG/SVG，落盘 ./exports/
+//   list-files                    列出在线文件（fileKey/文件名/版本/排队数）
 //   install-plugin [dir]          把插件文件拷到稳定目录（默认 ~/.figma-local-bridge/plugin）
 //   doctor                        自检：中继连通性、插件在线状态、版本一致性
 // 环境变量：FLB_PORT（默认 9741）
@@ -102,20 +103,37 @@ function cmdInstallPlugin(dir) {
   console.log('注意：包升级后需重新运行本命令并重启插件（doctor 可检查版本一致性）');
 }
 
+async function cmdListFiles() {
+  const reply = await sendOne({ action: '__status' }, { allowOffline: true });
+  const sessions = (reply.result && reply.result.sessions) || [];
+  if (!sessions.length) {
+    console.log('当前没有已注册的文件。请在 Figma 中运行「Figma Local Bridge」插件。');
+    return;
+  }
+  console.log(`已注册文件（${sessions.length}）：`);
+  for (const s of sessions) {
+    const seen = s.lastSeenAt ? new Date(s.lastSeenAt).toLocaleTimeString() : '未知';
+    console.log(`  ${s.alive ? '●' : '○'} ${s.fileName}  fileKey=${s.fileKey}  插件 v${s.pluginVersion}  最后心跳 ${seen}  排队 ${s.queuedCommands}`);
+  }
+}
+
 async function cmdDoctor() {
   console.log(`Figma Local Bridge v${PKG_VERSION} 自检`);
   try {
     const reply = await sendOne({ action: '__status' }, { allowOffline: true });
     const s = reply.result;
     console.log(`✅ 中继在线（v${s.serverVersion}，端口 ${s.port}）`);
-    if (s.pluginAlive) {
-      console.log(`✅ 插件在线（文件：${s.pluginFileName}，插件 v${s.pluginVersion}）`);
-      if (s.pluginVersion !== '未知' && s.pluginVersion !== s.serverVersion) {
-        console.log(`⚠️ 版本不一致：插件 v${s.pluginVersion} ≠ 中继 v${s.serverVersion}，请重新 install-plugin 并重启插件`);
-      }
-      if (s.queuedCommands > 0) console.log(`⚠️ 队列中有 ${s.queuedCommands} 条待执行命令`);
-    } else {
+    const alive = (s.sessions || []).filter((x) => x.alive);
+    if (!alive.length) {
       console.log('❌ 插件不在线：请在 Figma 中运行「Figma Local Bridge」插件');
+      return;
+    }
+    for (const x of alive) {
+      console.log(`✅ 插件在线（文件：${x.fileName}，fileKey: ${x.fileKey}，插件 v${x.pluginVersion}）`);
+      if (x.pluginVersion !== '未知' && x.pluginVersion !== s.serverVersion) {
+        console.log(`⚠️ 版本不一致：插件 v${x.pluginVersion} ≠ 中继 v${s.serverVersion}，请重新 install-plugin 并重启插件`);
+      }
+      if (x.queuedCommands > 0) console.log(`⚠️ ${x.fileName} 队列中有 ${x.queuedCommands} 条待执行命令`);
     }
   } catch (e) {
     console.log(`❌ 中继离线：${e.message}`);
@@ -139,6 +157,9 @@ async function main() {
     case 'export':
       await cmdExport(args[0], args[1]);
       break;
+    case 'list-files':
+      await cmdListFiles();
+      break;
     case 'install-plugin':
       cmdInstallPlugin(args[0]);
       break;
@@ -146,7 +167,7 @@ async function main() {
       await cmdDoctor();
       break;
     default:
-      console.log('用法：figma-bridge <server|send|render|export|install-plugin|doctor>');
+      console.log('用法：figma-bridge <server|send|render|export|list-files|install-plugin|doctor>');
       process.exit(cmd ? 2 : 0);
   }
 }
