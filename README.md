@@ -5,6 +5,8 @@ Figma 本地插件桥：**无需 Figma MCP 权限、免费账号可用**，让 A
 - 读：文件结构（`getStructure`）、任意节点导出 PNG/SVG（`exportNode`）
 - 写：声明式节点树渲染（`render`，支持自动布局）、组件实例（`INSTANCE`）、修改/删除节点（`update`/`remove`）、组件化（`makeComponent`）、原型连线（`link`）、图片/SVG 图标（`placeImage`/`importSvg`/`setImageFill`）
 
+中继支持多文件：在多个 Figma 文件中各自运行插件，`list-files` 查看在线文件，命令用 `--file` 指定目标（单文件用法不变）。
+
 ## 原理
 
 ```

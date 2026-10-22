@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0（2026-10-22）
+
+多文件路由（破坏性协议变更，插件与中继需一起升级）：
+
+- 中继：插件会话化（hello 携带 fileKey/instanceId，下发 sessionId），命令按 `target.fileKey` 路由；无 target 时恰好一个文件在线自动路由、多个在线报错并附清单
+- 中继：session TTL 驱逐（默认 90s）与每会话队列上限（默认 50），失联会话的排队/在途命令即时释放
+- 中继：/result 按 sessionId 校验归属，防跨会话串话；无 sessionId 的 poll 返回 400
+- CLI：新增 list-files；send/render/export 支持 --file <fileKey 或文件名唯一子串>；doctor 逐文件检查版本一致性
+- 插件：hello/poll/result 携带会话标识，sessionExpired 或 relayBootId 变化自动重握手
+- 升级动作：`figma-bridge install-plugin` 后重启插件；doctor 可验证
+
 ## 0.1.2（2026-10-13）
 
 - 中继：`/poll` 响应携带 `relayBootId`（每次启动随机生成的实例标识）

@@ -1,6 +1,6 @@
 {
   "name": "figma-local-bridge",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Figma 本地插件桥：无需 Figma MCP 权限，免费账号即可通过本地中继读写 Figma 画布（渲染节点树/组件实例/导出/结构读取）",
   "license": "MIT",
   "author": "TheoWang",

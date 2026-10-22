@@ -3,10 +3,13 @@
 // 端口与中继一致（默认 9741）；如需改端口，两处同步修改。
 
 var SERVER = 'http://localhost:9741';
-var PLUGIN_VERSION = '0.1.2';
+var PLUGIN_VERSION = '0.2.0';
+var instanceId = Math.random().toString(36).slice(2, 8);
+var sessionId = null;
+var fileKey = (typeof figma.fileKey === 'string' && figma.fileKey) || ('name:' + figma.root.name);
 var notifiedFailure = false;
 var notifiedSuccess = false;
-var lastBootId = null; // 中继实例标识：变化即对面重启/升级了，需重新握手
+var lastBootId = null;
 
 function sleep(ms) {
   return new Promise(function (resolve) {
@@ -14,28 +17,36 @@ function sleep(ms) {
   });
 }
 
+async function hello() {
+  var res = await fetch(
+    SERVER + '/hello?fileKey=' + encodeURIComponent(fileKey) +
+      '&fileName=' + encodeURIComponent(figma.root.name) +
+      '&version=' + PLUGIN_VERSION +
+      '&instanceId=' + instanceId,
+  );
+  var data = await res.json();
+  if (data && data.sessionId) sessionId = data.sessionId;
+}
+
 async function pollLoop() {
   for (;;) {
     try {
-      var res = await fetch(SERVER + '/poll');
+      if (!sessionId) await hello();
+      var res = await fetch(SERVER + '/poll?sessionId=' + encodeURIComponent(sessionId));
       var data = await res.json();
       if (!notifiedSuccess) {
         notifiedSuccess = true;
         notifiedFailure = false;
         figma.notify('Figma Local Bridge 已连接本地中继，可以接收命令了');
       }
-      // 即使没观察到断线（中继秒重启），bootId 变化也能识别新实例并重新握手；
-      // hello 失败时 lastBootId 不更新，下一轮自然重试
-      if (data && data.relayBootId !== lastBootId) {
-        await fetch(
-          SERVER + '/hello?fileName=' + encodeURIComponent(figma.root.name) + '&version=' + PLUGIN_VERSION
-        );
+      if (data && data.sessionExpired) {
+        sessionId = null; // 下一轮重新 hello
+      } else if (data && data.relayBootId !== lastBootId) {
+        sessionId = null; // 中继换实例：重新握手
         lastBootId = data.relayBootId;
-      }
-      if (data && data.command) {
+      } else if (data && data.command) {
         await runCommand(data.command);
       }
-      // command 为 null 表示长轮询空转超时，立即重新挂起
     } catch (e) {
       if (!notifiedFailure) {
         notifiedFailure = true;
@@ -64,7 +75,7 @@ async function runCommand(cmd) {
     await fetch(SERVER + '/result', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: cmd.id, ok: ok, result: result, error: error }),
+      body: JSON.stringify({ id: cmd.id, sessionId: sessionId, ok: ok, result: result, error: error }),
     });
   } catch (e) {
     // 结果回传失败：中继可能重启过，下一轮 poll 会重建状态
