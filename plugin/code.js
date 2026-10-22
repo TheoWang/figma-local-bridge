@@ -41,11 +41,16 @@ async function pollLoop() {
       }
       if (data && data.sessionExpired) {
         sessionId = null; // 下一轮重新 hello
-      } else if (data && data.relayBootId !== lastBootId) {
-        sessionId = null; // 中继换实例：重新握手
-        lastBootId = data.relayBootId;
-      } else if (data && data.command) {
-        await runCommand(data.command);
+      } else {
+        // 命令分支必须先于 bootId 重握手：poll 响应带 command 说明本会话已在当前
+        // 中继实例注册，此时先执行命令并回传结果，再标记重握手，避免命令被静默丢弃
+        if (data && data.command) {
+          await runCommand(data.command);
+        }
+        if (data && data.relayBootId !== lastBootId) {
+          sessionId = null; // 中继换实例：重新握手（命令已先执行，结果已回传）
+          lastBootId = data.relayBootId;
+        }
       }
     } catch (e) {
       if (!notifiedFailure) {
