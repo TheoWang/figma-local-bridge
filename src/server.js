@@ -15,8 +15,8 @@ const POLL_HOLD_MS = 25 * 1000;        // 长轮询挂起上限，空转后插�
 const QUEUE_TTL_MS = 60 * 1000;        // 队列条目未被插件取走的存活期（与 CLI 侧 70s 超时对齐）
 const QUEUE_SWEEP_MS = 15 * 1000;      // 队列 TTL 扫描周期
 const HEARTBEAT_MS = 30 * 1000;        // WS 心跳周期；两轮无 pong 判定半开连接并断开
-const SESSION_EVICT_MS = 90 * 1000;    // Task 4 接线，本任务先定义
-const SESSION_QUEUE_MAX = 50;          // Task 4 接线
+const SESSION_EVICT_MS = 90 * 1000;    // 会话失联驱逐阈值：seenAt 超过该时长即整体驱逐
+const SESSION_QUEUE_MAX = 50;          // 每会话排队上限：超出立即拒绝，防止内存无界增长
 
 // 查询串解析：插件侧只用原生 fetch 拼简单查询串，不值得为它引入 URL/URLSearchParams 依赖
 function queryOf(url) {
@@ -36,6 +36,8 @@ function createBridgeServer(options = {}) {
   const commandTimeoutMs = options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS;
   const queueTtlMs = options.queueTtlMs ?? QUEUE_TTL_MS;
   const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
+  const sessionEvictMs = options.sessionEvictMs ?? SESSION_EVICT_MS;
+  const sessionQueueMax = options.sessionQueueMax ?? SESSION_QUEUE_MAX;
   const log = typeof options.logger === 'function' ? options.logger : console.log.bind(console);
 
   // 实例标识：插件据此识别"对面的中继换实例了"（重启/升级），即使没观察到断线也重新握手
@@ -80,17 +82,43 @@ function createBridgeServer(options = {}) {
     return { session: alive[0] };
   };
 
-  // 队列 TTL：插件失联前入队的命令不能永久滞留（连同 cliSocket 引用）；按会话各自的队列扫描
+  // 会话驱逐（内存防护）：插件失联后，其挂起的 poll、排队与在途命令、sessions 条目都必须释放，
+  // 否则 cliSocket/响应对象会被滞留引用钉住——三条清理路径缺一不可。
+  function evictSession(session, reason) {
+    if (session.waitingPoll) {
+      clearTimeout(session.waitingPoll.timer);
+      sendJson(session.waitingPoll.res, 200, { command: null, sessionExpired: true, relayBootId: bootId });
+      session.waitingPoll = null;
+    }
+    for (const item of session.queue.splice(0)) {
+      safeSend(item.cliSocket, { id: item.id, ok: false, error: reason });
+    }
+    for (const [id, item] of inflight) {
+      if (item.sessionId === session.sessionId) {
+        inflight.delete(id);
+        clearTimeout(item.timer);
+        safeSend(item.cliSocket, { id, ok: false, error: reason });
+      }
+    }
+    sessions.delete(session.sessionId);
+  }
+
+  // 队列 TTL：插件失联前入队的命令不能永久滞留（连同 cliSocket 引用）；按会话各自的队列扫描。
+  // 同一轮扫描顺带做会话 TTL 驱逐；扫描周期取两个 TTL 一半中的较小者，保证驱逐及时。
   const queueSweeper = queueTtlMs > 0
     ? setInterval(() => {
-        const deadline = Date.now() - queueTtlMs;
+        const now = Date.now();
+        const deadline = now - queueTtlMs;
         for (const session of sessions.values()) {
           while (session.queue.length && session.queue[0].enqueuedAt <= deadline) {
             const item = session.queue.shift();
             safeSend(item.cliSocket, { id: item.id, ok: false, error: `命令超时（${queueTtlMs / 1000}s 未被插件取走）` });
           }
+          if (sessionEvictMs > 0 && now - session.seenAt > sessionEvictMs) {
+            evictSession(session, '插件会话已失效（插件失联）');
+          }
         }
-      }, Math.min(QUEUE_SWEEP_MS, queueTtlMs / 2))
+      }, Math.min(QUEUE_SWEEP_MS, queueTtlMs / 2, sessionEvictMs > 0 ? sessionEvictMs / 2 : QUEUE_SWEEP_MS))
     : null;
 
   // ---------- HTTP（插件侧） ----------
@@ -257,6 +285,11 @@ function createBridgeServer(options = {}) {
           return;
         }
         const session = picked.session;
+        // 每会话排队上限（内存防护）：超限立即拒绝，避免单个失联文件把队列撑爆
+        if (session.queue.length >= sessionQueueMax) {
+          safeSend(socket, { id, ok: false, error: `该文件命令队列已满（${sessionQueueMax}）` });
+          return;
+        }
         const item = { id, command: msg.command, cliSocket: socket, enqueuedAt: Date.now(), sessionId: session.sessionId };
         if (session.waitingPoll) {
           const entry = session.waitingPoll;

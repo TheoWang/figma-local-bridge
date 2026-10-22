@@ -1,6 +1,6 @@
 // 中继服务测试：node --test test/
 // 依赖 src/server.js 暴露 createBridgeServer(options) 工厂：
-//   - 可注入 pollHoldMs / commandTimeoutMs / queueTtlMs / heartbeatMs（默认值同生产）
+//   - 可注入 pollHoldMs / commandTimeoutMs / queueTtlMs / heartbeatMs / sessionEvictMs（默认值同生产）
 //   - listen() 后 bridge.port 为实际端口；close() 释放端口并清理全部定时器
 // 定时器注入是为了让 TTL/心跳类行为在毫秒级可测。
 const test = require('node:test');
@@ -18,7 +18,7 @@ const { createBridgeServer } = require('../src/server');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const FAST = { pollHoldMs: 400, commandTimeoutMs: 600, queueTtlMs: 400, heartbeatMs: 200 };
+const FAST = { pollHoldMs: 400, commandTimeoutMs: 600, queueTtlMs: 400, heartbeatMs: 200, sessionEvictMs: 2000 };
 
 async function startBridge(opts = {}) {
   const bridge = createBridgeServer({ ...FAST, logger: () => {}, ...opts });
@@ -416,6 +416,72 @@ test('/result 的 sessionId 不符时被丢弃，CLI 按超时处理', async () 
     assert.equal(reply.ok, false);
     assert.match(reply.error, /超时/);
     assert.ok(Date.now() - t0 >= 550, `过快返回：${Date.now() - t0}ms`);
+  } finally {
+    await bridge.close();
+  }
+});
+
+// ---------- 会话生命周期与内存防护（v0.2.0 Task 4） ----------
+
+test('会话驱逐：挂起的 poll 收到 sessionExpired 推送', async () => {
+  // harness 时序注入：驱逐扫描周期为 sessionEvictMs/2，首达点约 750ms（严格大于判定），
+  // 若沿用 FAST 的 pollHoldMs(400ms)，挂起 poll 会先空转返回、驱逐推送永远轮不到
+  const { bridge, base } = await startBridge({ sessionEvictMs: 500, queueTtlMs: 10000, pollHoldMs: 1500 });
+  try {
+    const sid = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    const p = hangPoll(base, sid);
+    const res = await p.done; // poll 到达刷新 seenAt；500ms 后驱逐推送
+    assert.equal(res.status, 200);
+    assert.equal(res.body.sessionExpired, true);
+    assert.equal(res.body.command, null);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('会话驱逐：在途命令的 CLI 收到会话失效', async () => {
+  // harness 时序注入：驱逐首达点约 750ms，FAST 的 commandTimeoutMs(600ms) 会先发"命令超时"，
+  // 拉长 pollHoldMs/commandTimeoutMs 让驱逐成为先发生的一方
+  const { bridge, port, base } = await startBridge({ sessionEvictMs: 500, queueTtlMs: 10000, pollHoldMs: 1500, commandTimeoutMs: 2000 });
+  try {
+    const sid = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    const p = hangPoll(base, sid);
+    const replyP = sendOne(port, { action: 'ping' });
+    await p.done; // 命令已投递，插件不再 poll 也不回结果
+    const reply = await replyP;
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /会话已失效/);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('会话驱逐：排队命令被拒，驱逐后 poll 得 sessionExpired', async () => {
+  const { bridge, port, base } = await startBridge({ sessionEvictMs: 500, queueTtlMs: 10000 });
+  try {
+    const sid = await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    // 不 poll：命令排队，seenAt 停在 hello 时刻
+    const reply = await sendOne(port, { action: 'ping' });
+    assert.equal(reply.ok, false);
+    assert.match(reply.error, /会话已失效/);
+    const r = await fetch(`${base}/poll?sessionId=${encodeURIComponent(sid)}`);
+    const body = await r.json();
+    assert.equal(body.sessionExpired, true);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('每会话队列上限：超出即拒', async () => {
+  const { bridge, port, base } = await startBridge({ sessionQueueMax: 2 });
+  try {
+    await hello(base, { fileKey: 'fkA', fileName: '文件A', instanceId: 'iA' });
+    const r1 = sendOne(port, { action: 'ping' });
+    const r2 = sendOne(port, { action: 'ping' });
+    const r3 = await sendOne(port, { action: 'ping' }); // 第 3 条超限立即被拒
+    assert.equal(r3.ok, false);
+    assert.match(r3.error, /队列已满（2）/);
+    await r1; await r2; // 前两条等 TTL 驱逐，避免悬置连接
   } finally {
     await bridge.close();
   }
