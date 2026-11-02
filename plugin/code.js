@@ -3,7 +3,7 @@
 // 端口与中继一致（默认 9741）；如需改端口，两处同步修改。
 
 var SERVER = 'http://localhost:9741';
-var PLUGIN_VERSION = '0.2.1';
+var PLUGIN_VERSION = '0.2.2';
 var instanceId = Math.random().toString(36).slice(2, 8);
 var sessionId = null;
 var fileKey = (typeof figma.fileKey === 'string' && figma.fileKey) || ('name:' + figma.root.name);
@@ -416,10 +416,14 @@ function inspectNode(node, depth) {
     }
   }
   if ('effects' in node && node.effects.length) {
-    info.effects = node.effects.map(function (e) {
-      if (e.type.indexOf('SHADOW') < 0) return { type: e.type };
-      return { type: e.type, color: paintToHex(e), offset: e.offset, radius: e.radius };
-    });
+    info.effects = node.effects
+      .filter(function (e) {
+        return e.visible !== false; // 隐藏的 effect 不参与视觉还原，不输出
+      })
+      .map(function (e) {
+        if (e.type.indexOf('SHADOW') < 0) return { type: e.type };
+        return { type: e.type, color: paintToHex(e), offset: e.offset, radius: e.radius, spread: e.spread };
+      });
   }
   if (node.type === 'TEXT') {
     info.text = {
@@ -458,7 +462,8 @@ function paintToHex(p) {
         return ('0' + Math.round(v * 255).toString(16)).slice(-2).toUpperCase();
       })
       .join('');
-  var a = p.opacity == null ? 1 : p.opacity;
+  // alpha 来源分型：paint 在顶层 opacity；shadow effect 无 opacity，alpha 编码在 color.a（RGBA）
+  var a = p.opacity != null ? p.opacity : p.color.a != null ? p.color.a : 1;
   return a < 1 ? hex + ('0' + Math.round(a * 255).toString(16)).slice(-2).toUpperCase() : hex;
 }
 

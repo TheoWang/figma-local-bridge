@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2（2026-11-02）
+
+effects 阴影读取修复（修复用户反馈「shadow alpha 不可读」）：
+
+- 插件：paintToHex 的 alpha 来源分型——paint 在顶层 `opacity`，shadow effect 无 `opacity`、alpha 在 `color.a`（RGBA）；此前阴影透明度被静默读成 1（不透明），8 位 `#RRGGBBAA` 的 alpha 位消失
+- 插件：inspectNode 阴影输出补 `spread` 字段（此前遗漏）
+- 插件：inspectNode 过滤 `visible: false` 的 effect（隐藏效果不参与视觉还原）
+- 测试：新增 4 例（阴影 alpha / 不透明阴影无冗余后缀 / 填充 opacity 回归哨兵 / spread+visible 过滤）
+- 升级动作：`figma-bridge install-plugin` 后重启插件；doctor 可验证
+
 ## 0.2.1（2026-11-02）
 
 per-corner 圆角桥接（修复用户反馈「上圆角 topLeft/topRightRadius 读不出」）：

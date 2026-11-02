@@ -110,3 +110,45 @@ test('createNode：render 规格接受 per-corner 半径参数并逐角赋值', 
   assert.equal(node.bottomLeftRadius, 0, '未指定的角不应被改动');
   assert.equal(node.bottomRightRadius, 0);
 });
+
+// ---------- effects：shadow alpha / spread / visible 过滤 ----------
+// Figma API：paint 的 alpha 在顶层 opacity（color 为 RGB）；shadow effect 无 opacity，
+// alpha 编码在 color.a（RGBA）。paintToHex 两种来源都要读。
+
+test('paintToHex：shadow 的 alpha 从 color.a 读出（此前被静默丢弃）', () => {
+  const sandbox = loadPlugin(makeFigma());
+  const shadow = { type: 'DROP_SHADOW', color: { r: 0, g: 0.2, b: 0.4, a: 0.25 }, offset: { x: 0, y: 4 }, radius: 12 };
+  assert.equal(sandbox.paintToHex(shadow), '#00336640');
+});
+
+test('paintToHex：不透明阴影无 alpha 后缀（不引入冗余位）', () => {
+  const sandbox = loadPlugin(makeFigma());
+  const shadow = { type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 1 }, offset: { x: 0, y: 2 }, radius: 8 };
+  assert.equal(sandbox.paintToHex(shadow), '#000000');
+});
+
+test('paintToHex：填充的顶层 opacity 行为不变（回归哨兵）', () => {
+  const sandbox = loadPlugin(makeFigma());
+  assert.equal(sandbox.paintToHex({ type: 'SOLID', color: { r: 1, g: 0, b: 0 }, opacity: 0.5 }), '#FF000080');
+});
+
+test('inspectNode：阴影读出 spread，visible:false 的 effect 被过滤', () => {
+  const figmaMock = makeFigma();
+  const node = makeCornerNode(figmaMock, { uniform: 0, tl: 0, tr: 0, bl: 0, br: 0 });
+  node.effects = [
+    { type: 'DROP_SHADOW', color: { r: 0, g: 0.2, b: 0.4, a: 0.25 }, offset: { x: 0, y: 4 }, radius: 12, spread: 8, visible: true },
+    { type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.5 }, offset: { x: 0, y: 2 }, radius: 4, visible: false },
+    { type: 'LAYER_BLUR', radius: 6, visible: true },
+  ];
+  const sandbox = loadPlugin(figmaMock);
+  const info = sandbox.inspectNode(node, 0);
+  assert.equal(info.effects.length, 2, 'visible:false 的阴影不应出现在输出');
+  assert.deepEqual(info.effects[0], {
+    type: 'DROP_SHADOW',
+    color: '#00336640',
+    offset: { x: 0, y: 4 },
+    radius: 12,
+    spread: 8,
+  });
+  assert.deepEqual(info.effects[1], { type: 'LAYER_BLUR' });
+});
