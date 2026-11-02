@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.3（2026-11-02）
+
+渐变 stops 读取修复（修复用户反馈「渐变 stops 不可读」）：
+
+- 插件：GradientPaint 没有 `color` 字段，此前命中 paintToHex 兜底分支被降级为类型字符串（`"GRADIENT_LINEAR"`），stops/颜色/alpha/方向全部丢失
+- 插件：`GRADIENT_*` 填充与描边现输出 `{ type, stops: [{ position, color: '#RRGGBBAA' }], transform }` 对象——stop 的 alpha 复用 0.2.2 的 `color.a` 逻辑，transform 为 2×3 矩阵（还原渐变方向必需）
+- 插件：SOLID/IMAGE 与 shadow effect 行为不变（既有契约回归哨兵覆盖）
+- 测试：新增 3 例（渐变对象读出 / fills 链路 / SOLID 契约哨兵），重构提取 `rgbToHex`/`alphaHex`
+- 升级动作：`figma-bridge install-plugin` 后重启插件；doctor 可验证
+
 ## 0.2.2（2026-11-02）
 
 effects 阴影读取修复（修复用户反馈「shadow alpha 不可读」）：

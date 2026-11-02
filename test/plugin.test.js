@@ -152,3 +152,47 @@ test('inspectNode：阴影读出 spread，visible:false 的 effect 被过滤', (
   });
   assert.deepEqual(info.effects[1], { type: 'LAYER_BLUR' });
 });
+
+// ---------- 渐变 stops：GradientPaint 无 color 字段（数据在 gradientStops + gradientTransform） ----------
+
+function makeGradientPaint() {
+  return {
+    type: 'GRADIENT_LINEAR',
+    gradientTransform: [[1, 0, 0], [0, 1, 0]],
+    gradientStops: [
+      { position: 0, color: { r: 0.29, g: 0.42, b: 0.93, a: 1 } },
+      { position: 1, color: { r: 0.31, g: 0.85, b: 0.62, a: 0.6 } },
+    ],
+  };
+}
+
+test('paintToHex：渐变读出 stops（含 alpha）与 transform，不再降级为类型字符串', () => {
+  const sandbox = loadPlugin(makeFigma());
+  assert.deepEqual(sandbox.paintToHex(makeGradientPaint()), {
+    type: 'GRADIENT_LINEAR',
+    stops: [
+      { position: 0, color: '#4A6BED' },
+      { position: 1, color: '#4FD99E99' },
+    ],
+    transform: [[1, 0, 0], [0, 1, 0]],
+  });
+});
+
+test('inspectNode：渐变填充在 fills 里以对象读出（此前只有 "GRADIENT_LINEAR" 字符串）', () => {
+  const figmaMock = makeFigma();
+  const node = makeCornerNode(figmaMock, { uniform: 0, tl: 0, tr: 0, bl: 0, br: 0 });
+  node.fills = [makeGradientPaint()];
+  const sandbox = loadPlugin(figmaMock);
+  const info = sandbox.inspectNode(node, 0);
+  assert.equal(info.fills.length, 1);
+  assert.equal(info.fills[0].type, 'GRADIENT_LINEAR');
+  assert.deepEqual(info.fills[0].stops, [
+    { position: 0, color: '#4A6BED' },
+    { position: 1, color: '#4FD99E99' },
+  ]);
+});
+
+test('paintToHex：SOLID 填充仍为 hex 字符串（渐变改造不回归既有契约）', () => {
+  const sandbox = loadPlugin(makeFigma());
+  assert.equal(sandbox.paintToHex({ type: 'SOLID', color: { r: 1, g: 0, b: 0 } }), '#FF0000');
+});

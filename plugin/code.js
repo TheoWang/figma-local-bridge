@@ -3,7 +3,7 @@
 // 端口与中继一致（默认 9741）；如需改端口，两处同步修改。
 
 var SERVER = 'http://localhost:9741';
-var PLUGIN_VERSION = '0.2.2';
+var PLUGIN_VERSION = '0.2.3';
 var instanceId = Math.random().toString(36).slice(2, 8);
 var sessionId = null;
 var fileKey = (typeof figma.fileKey === 'string' && figma.fileKey) || ('name:' + figma.root.name);
@@ -452,19 +452,38 @@ function inspectNode(node, depth) {
   return info;
 }
 
-function paintToHex(p) {
-  if (!p || !p.color) return p && p.type ? p.type : null;
-  var c = p.color;
-  var hex =
-    '#' +
+function rgbToHex(c) {
+  return '#' +
     [c.r, c.g, c.b]
       .map(function (v) {
         return ('0' + Math.round(v * 255).toString(16)).slice(-2).toUpperCase();
       })
       .join('');
+}
+
+function alphaHex(a) {
+  return ('0' + Math.round(a * 255).toString(16)).slice(-2).toUpperCase();
+}
+
+function paintToHex(p) {
+  if (!p) return null;
+  if (p.type && p.type.indexOf('GRADIENT') === 0) {
+    // 渐变 paint 没有 color 字段：数据在 gradientStops（RGBA，alpha 在 color.a）与 gradientTransform
+    return {
+      type: p.type,
+      stops: (p.gradientStops || []).map(function (s) {
+        var a = s.color && s.color.a != null ? s.color.a : 1;
+        var hex = rgbToHex(s.color);
+        return { position: s.position, color: a < 1 ? hex + alphaHex(a) : hex };
+      }),
+      transform: p.gradientTransform,
+    };
+  }
+  if (!p.color) return p.type || null;
+  var hex = rgbToHex(p.color);
   // alpha 来源分型：paint 在顶层 opacity；shadow effect 无 opacity，alpha 编码在 color.a（RGBA）
   var a = p.opacity != null ? p.opacity : p.color.a != null ? p.color.a : 1;
-  return a < 1 ? hex + ('0' + Math.round(a * 255).toString(16)).slice(-2).toUpperCase() : hex;
+  return a < 1 ? hex + alphaHex(a) : hex;
 }
 
 function removeNode(params) {
