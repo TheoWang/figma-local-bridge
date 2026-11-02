@@ -57,6 +57,7 @@ npx figma-bridge doctor                    # 自检
   "x": 0, "y": 0,                  // 父级非自动布局时生效；落在页面上不给坐标时自动向右排开
   "fills": ["#RRGGBB" 或 "#RRGGBBAA"],
   "cornerRadius": 12,
+  "topLeftRadius": 16, "topRightRadius": 16,   // 可选：逐角圆角（bottomLeft/bottomRight 同名）
   "stroke": { "color": "#000000", "weight": 1 },
   "layout": {                      // 自动布局（仅 FRAME）
     "mode": "VERTICAL",            // VERTICAL | HORIZONTAL | NONE
@@ -85,6 +86,7 @@ INSTANCE：`{ "type": "INSTANCE", "component": "按钮/主要/中", "text": "覆
 - **`createImageAsync` 校验严格**：必须精确长度的全新 `Uint8Array`，subarray 视图会被拒。
 - **自动布局副轴默认 FIXED**：需显式 `counterAxisSizingMode: 'AUTO'`，否则文字裁切。
 - **属性层级**：`padding/gap/primaryAlign` 属 `layout`；`fills/cornerRadius/width` 属节点顶层——放错层级静默忽略。
+- **逐角圆角必须显式读**：四角不一致时 Figma 的 `cornerRadius` 读出为 `figma.mixed`（Symbol，JSON 回传会静默丢失）——inspectNode 对 mixed 逐角读出 `topLeftRadius` 等四键；render/update 支持同名逐角参数。
 - **组件检索要先 `loadAllPagesAsync`**（dynamic-page 模式）；组件缓存失效要重建重试。
 - **TEXT 不可转组件**，且 TEXT 按内容自动命名（收集组件化目标时排除）。
 - **改插件代码必须重启插件；改 manifest 必须重新导入**；包升级后跑 `install-plugin` + 重启插件（`doctor` 查版本一致性）。

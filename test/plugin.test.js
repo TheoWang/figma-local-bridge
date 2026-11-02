@@ -1,0 +1,112 @@
+// 插件侧测试：node --test test/
+// plugin/code.js 是 Figma 插件沙箱脚本（无 module.exports），这里用 vm 加载源码，
+// 注入 mock 的 figma/fetch/setTimeout：
+//   - fetch 返回永不 resolve 的 Promise → pollLoop 挂起在第一次 await，不产生事件循环句柄
+//   - setTimeout 为 no-op → sleep 永不触发，测试进程可正常退出
+// figma.mixed 用真实 Symbol 模拟，验证 per-corner 半径桥接（含 mixed 泄漏防护）。
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const CODE_SRC = fs.readFileSync(path.join(__dirname, '..', 'plugin', 'code.js'), 'utf8');
+
+function loadPlugin(figmaMock) {
+  const sandbox = {
+    figma: figmaMock,
+    fetch: () => new Promise(() => {}),
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    console: { log: () => {} },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(CODE_SRC, sandbox, { filename: 'plugin/code.js' });
+  return sandbox;
+}
+
+function makeFigma() {
+  return { root: { name: '测试文件' }, mixed: Symbol('figma.mixed') };
+}
+
+// CornerMixin 形状的最小节点（RECTANGLE 支持全部圆角属性）
+function makeCornerNode(figmaMock, corners) {
+  return {
+    id: '1:2',
+    name: '卡片',
+    type: 'RECTANGLE',
+    width: 100,
+    height: 80,
+    absoluteBoundingBox: { x: 0, y: 0 },
+    opacity: 1,
+    visible: true,
+    fills: [],
+    strokes: [],
+    effects: [],
+    cornerRadius: corners.uniform,
+    topLeftRadius: corners.tl,
+    topRightRadius: corners.tr,
+    bottomLeftRadius: corners.bl,
+    bottomRightRadius: corners.br,
+    resize: () => {},
+  };
+}
+
+test('inspectNode：四角不一致时逐角读出，且不再输出 figma.mixed（Symbol）', () => {
+  const figmaMock = makeFigma();
+  const node = makeCornerNode(figmaMock, { uniform: figmaMock.mixed, tl: 16, tr: 16, bl: 0, br: 0 });
+  const sandbox = loadPlugin(figmaMock);
+  const info = sandbox.inspectNode(node, 0);
+  assert.ok(!('cornerRadius' in info), 'mixed 时不应输出 cornerRadius（Symbol 会被 JSON 丢弃）');
+  assert.equal(info.topLeftRadius, 16);
+  assert.equal(info.topRightRadius, 16);
+  assert.equal(info.bottomLeftRadius, 0);
+  assert.equal(info.bottomRightRadius, 0);
+  // 结果必须可 JSON 序列化（Symbol 泄漏防护：runCommand 经 JSON.stringify 回传）
+  assert.deepEqual(JSON.parse(JSON.stringify(info)), info);
+});
+
+test('inspectNode：四角一致时保持 cornerRadius 输出（既有行为不回归）', () => {
+  const figmaMock = makeFigma();
+  const node = makeCornerNode(figmaMock, { uniform: 12, tl: 12, tr: 12, bl: 12, br: 12 });
+  const sandbox = loadPlugin(figmaMock);
+  const info = sandbox.inspectNode(node, 0);
+  assert.equal(info.cornerRadius, 12);
+  assert.ok(!('topLeftRadius' in info), '统一圆角时不需要冗余的 per-corner 键');
+});
+
+test('updateNode：接受 per-corner 半径参数并逐角赋值', async () => {
+  const figmaMock = makeFigma();
+  const node = makeCornerNode(figmaMock, { uniform: 0, tl: 0, tr: 0, bl: 0, br: 0 });
+  figmaMock.getNodeById = (id) => (id === '1:2' ? node : null);
+  const sandbox = loadPlugin(figmaMock);
+  await sandbox.updateNode({ nodeId: '1:2', topLeftRadius: 16, topRightRadius: 16 });
+  assert.equal(node.topLeftRadius, 16);
+  assert.equal(node.topRightRadius, 16);
+  assert.equal(node.bottomLeftRadius, 0, '未指定的角不应被改动');
+  assert.equal(node.bottomRightRadius, 0);
+});
+
+test('createNode：render 规格接受 per-corner 半径参数并逐角赋值', async () => {
+  const figmaMock = makeFigma();
+  const created = makeCornerNode(figmaMock, { uniform: 0, tl: 0, tr: 0, bl: 0, br: 0 });
+  figmaMock.createRectangle = () => created;
+  const sandbox = loadPlugin(figmaMock);
+  const node = await sandbox.createNode(
+    {
+      type: 'RECTANGLE',
+      name: '上圆角卡片',
+      width: 10,
+      height: 10,
+      fills: ['#112233'],
+      topLeftRadius: 16,
+      topRightRadius: 16,
+    },
+    { appendChild: () => {} },
+  );
+  assert.equal(node, created);
+  assert.equal(node.topLeftRadius, 16);
+  assert.equal(node.topRightRadius, 16);
+  assert.equal(node.bottomLeftRadius, 0, '未指定的角不应被改动');
+  assert.equal(node.bottomRightRadius, 0);
+});

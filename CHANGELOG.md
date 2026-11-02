@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1（2026-11-02）
+
+per-corner 圆角桥接（修复用户反馈「上圆角 topLeft/topRightRadius 读不出」）：
+
+- 插件：inspectNode 对四角不一致的节点逐角读出 `topLeftRadius`/`topRightRadius`/`bottomLeftRadius`/`bottomRightRadius`——此前 `cornerRadius` 读出为 `figma.mixed`（Symbol），经 JSON 回传时静默丢失，整段圆角信息消失
+- 插件：render/update 支持逐角圆角参数（`topLeftRadius` 等，与 `cornerRadius` 简写并存，仅指定的角被改动）
+- 测试：新增插件侧 vm 加载测试套件（4 例：mixed 读出 / 统一回归 / update / create）
+- 升级动作：`figma-bridge install-plugin` 后重启插件；doctor 可验证
+
 ## 0.2.0（2026-10-22）
 
 多文件路由（破坏性协议变更，插件与中继需一起升级）：

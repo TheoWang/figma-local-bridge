@@ -3,7 +3,7 @@
 // 端口与中继一致（默认 9741）；如需改端口，两处同步修改。
 
 var SERVER = 'http://localhost:9741';
-var PLUGIN_VERSION = '0.2.0';
+var PLUGIN_VERSION = '0.2.1';
 var instanceId = Math.random().toString(36).slice(2, 8);
 var sessionId = null;
 var fileKey = (typeof figma.fileKey === 'string' && figma.fileKey) || ('name:' + figma.root.name);
@@ -158,7 +158,8 @@ function execute(command) {
   }
 }
 
-// 修改已有节点：{ nodeId, name?, fills?, opacity?, cornerRadius?, width?, height?, x?, y?,
+// 修改已有节点：{ nodeId, name?, fills?, opacity?, cornerRadius?, topLeftRadius?, topRightRadius?,
+//   bottomLeftRadius?, bottomRightRadius?, width?, height?, x?, y?,
 //   text?: { characters?, fontSize?, fontWeight?, color? } }
 async function updateNode(params) {
   var node = figma.getNodeById(params.nodeId);
@@ -168,6 +169,7 @@ async function updateNode(params) {
   if (params.opacity !== undefined) node.opacity = params.opacity;
   if (params.cornerRadius !== undefined && 'cornerRadius' in node)
     node.cornerRadius = params.cornerRadius;
+  applyCornerRadii(node, params);
   if ((params.width || params.height) && 'resize' in node) {
     node.resize(params.width || node.width, params.height || node.height);
   }
@@ -402,7 +404,17 @@ function inspectNode(node, depth) {
   if ('strokes' in node && node.strokes.length) {
     info.stroke = { color: paintToHex(node.strokes[0]), weight: node.strokeWeight };
   }
-  if ('cornerRadius' in node && node.cornerRadius) info.cornerRadius = node.cornerRadius;
+  if ('cornerRadius' in node) {
+    if (node.cornerRadius === figma.mixed) {
+      // 四角不一致：cornerRadius 读出为 figma.mixed（Symbol 无法 JSON 序列化，回传时静默丢失），逐角读出
+      info.topLeftRadius = node.topLeftRadius;
+      info.topRightRadius = node.topRightRadius;
+      info.bottomLeftRadius = node.bottomLeftRadius;
+      info.bottomRightRadius = node.bottomRightRadius;
+    } else if (node.cornerRadius) {
+      info.cornerRadius = node.cornerRadius;
+    }
+  }
   if ('effects' in node && node.effects.length) {
     info.effects = node.effects.map(function (e) {
       if (e.type.indexOf('SHADOW') < 0) return { type: e.type };
@@ -478,6 +490,7 @@ function exportNode(params) {
 
 // tree 规格示例：
 // { type: 'FRAME', name, width, height, fills: ['#0B1F3A'], cornerRadius,
+//   topLeftRadius?, topRightRadius?, bottomLeftRadius?, bottomRightRadius?,
 //   layout: { mode: 'VERTICAL', gap: 16, padding: [24,24,24,24], primaryAlign: 'MIN', counterAlign: 'CENTER' },
 //   children: [ { type: 'TEXT', text: { characters: '标题', fontSize: 24, fontWeight: 700, color: '#FFFFFF' } } ] }
 
@@ -548,6 +561,7 @@ function createNode(spec, parent) {
 
   if (spec.cornerRadius !== undefined && 'cornerRadius' in node)
     node.cornerRadius = spec.cornerRadius;
+  applyCornerRadii(node, spec);
   if (spec.opacity !== undefined) node.opacity = spec.opacity;
   if (spec.stroke && 'strokes' in node) {
     node.strokes = [hexToPaint(spec.stroke.color || '#000000')];
@@ -664,6 +678,15 @@ function createText(spec, parent) {
 }
 
 // ---------- 工具函数 ----------
+
+// per-corner 圆角：{ topLeftRadius?, topRightRadius?, bottomLeftRadius?, bottomRightRadius? }
+// cornerRadius 简写之外的逐角通道；仅当节点支持（CornerMixin）时逐角赋值
+var CORNER_PROPS = ['topLeftRadius', 'topRightRadius', 'bottomLeftRadius', 'bottomRightRadius'];
+function applyCornerRadii(node, spec) {
+  CORNER_PROPS.forEach(function (k) {
+    if (spec[k] !== undefined && k in node) node[k] = spec[k];
+  });
+}
 
 function hexToPaint(hex) {
   var h = String(hex).replace('#', '');
