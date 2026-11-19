@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0
+## 0.3.0（2026-11-19）
 
 - 新增 `figma-bridge mcp`：MCP stdio server，16 个自描述工具（list_files / ping / list_pages / create_page / goto_page / get_structure / inspect_node / render / update / remove / export_node / place_image / import_svg / set_image_fill / make_component / link）
 - 中继自动拉起：MCP server 启动探测 9741，不在线自动 spawn 中继子进程，退出时回收
