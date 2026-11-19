@@ -65,7 +65,7 @@ async function fetchStatusCli() {
 
 async function cmdSend(arg, selector) {
   let command = readCommand(arg);
-  if (command.action === 'importSvg') command = await rasterizeSvgToPlaceImage(command.params);
+  if (command.action === 'importSvg') command = await rasterizeSvgToPlaceImage(command.params || {});
   // --file 注入直接覆盖 command.target（用户在 JSON 里手写 target 时以 --file 为准）
   if (selector) {
     command.target = { fileKey: await resolveFileKey(fetchStatusCli, selector) };
