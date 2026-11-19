@@ -1,7 +1,8 @@
 // MCP server 的中继连接层：一条长驻 WebSocket。
 // 串行化的根因：中继协议的命令 id 由中继分配、客户端消息不携带 id（server.js nextId++），
 // 单连接并发命令无法做客户端侧配对——用 promise 链把命令排队，一次一条。
-// 断线按指数退避重连（1s→30s 封顶）；重试受单命令 deadline 约束，超时即报"中继离线"。
+// 断线按指数退避重连（1s→30s 封顶）；deadline 只约束拨号重试，回复阶段重新拿满超时，
+// 保证回复窗口恒大于中继侧的 60s 命令超时，迟到的失败回复不会误配给下一条命令。
 const WebSocket = require('ws');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -35,6 +36,7 @@ class BridgeConnection {
     this._pending = null;      // 串行化 ⇒ 同一时刻至多一个挂起命令
     this._chain = Promise.resolve();
     this._backoffMs = 1000;
+    this._closed = false;      // close() 置位：中止进行中的拨号/重试循环
   }
 
   // 拨号一次（带超时）。已有健康连接时直接复用。
@@ -48,6 +50,11 @@ class BridgeConnection {
       }, this.dialTimeoutMs);
       ws.on('open', () => {
         clearTimeout(timer);
+        if (this._closed) { // close() 发生在握手期间：不接管，立即关掉
+          try { ws.close(); } catch {}
+          reject(new Error('连接已关闭'));
+          return;
+        }
         ws.on('message', (raw) => this._onMessage(raw));
         ws.on('close', () => {
           if (this.ws === ws) {
@@ -77,9 +84,11 @@ class BridgeConnection {
 
   async _sendOne(command) {
     const deadline = Date.now() + this.commandTimeoutMs;
-    // 拨号（离线时按退避重试，直到本命令的 deadline）
+    // 拨号（离线时按退避重试，直到本命令的 deadline）。deadline 只约束拨号；
+    // 成功后回复计时器重新拿满完整超时，回复窗口无条件 ≥ commandTimeoutMs > 中继侧 60s。
     let ws = null;
     for (;;) {
+      if (this._closed) throw new Error('连接已关闭');
       try {
         ws = await this.dial();
         break;
@@ -96,8 +105,13 @@ class BridgeConnection {
         timer: setTimeout(() => {
           if (this._pending === entry) this._pending = null;
           reject(new Error(`命令超时（${this.commandTimeoutMs / 1000}s）`));
-        }, Math.max(1, deadline - Date.now())),
+        }, this.commandTimeoutMs),
       };
+      if (this._closed) { // close() 发生在拨号成功与安装挂起命令之间
+        clearTimeout(entry.timer);
+        reject(new Error('连接已关闭'));
+        return;
+      }
       this._pending = entry;
       try {
         ws.send(JSON.stringify({ role: 'cli', command }));
@@ -125,6 +139,7 @@ class BridgeConnection {
   }
 
   close() {
+    this._closed = true;
     if (this._pending) {
       clearTimeout(this._pending.timer);
       this._pending.reject(new Error('连接已关闭'));

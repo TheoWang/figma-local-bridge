@@ -34,7 +34,7 @@ function autoPoller(base, sessionId, respond) {
         const body = await r.json();
         if (body && body.command) {
           commands.push(body.command);
-          const out = respond ? respond(body.command) : { ok: true, result: { ack: body.command.action } };
+          const out = respond ? await respond(body.command) : { ok: true, result: { ack: body.command.action } };
           await fetch(`${base}/result`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: body.command.id, sessionId, ...out }),
@@ -140,4 +140,32 @@ test('断线重连：中继换实例（同端口新 bridge）后下一条命令�
     const result = await conn.request({ action: 'ping' });
     assert.deepEqual(result, { ack: 'ping' });
   } finally { p2.stop(); conn.close(); await second.close(); }
+});
+
+test('回复窗口：拨号重试消耗后，回复计时器仍拿满完整超时', async () => {
+  const port = await getFreePort(); // 先占空闲端口但不监听 → 首轮拨号必败
+  const conn = new BridgeConnection({ port, commandTimeoutMs: 1500, logger: () => {} });
+  const base = `http://127.0.0.1:${port}`;
+  const p = conn.request({ action: 'ping' }); // 第一轮拨号失败后进入约 1s 退避
+  await sleep(100); // 确保首轮拨号已失败
+  const bridge = createBridgeServer({ ...FAST, logger: () => {}, port }); // 退避窗口内在同端口起中继
+  await bridge.listen('127.0.0.1');
+  const sid = await hello(base);
+  const p1 = autoPoller(base, sid, async () => { await sleep(800); return { ok: true, result: { ack: 'ping' } }; });
+  try {
+    // 拨号阶段耗掉约 1s：若回复计时器用剩余预算（约 500ms < 插件 800ms 延迟）会误报命令超时；
+    // 修复后回复阶段重新拿满 1500ms → 正常等到应答
+    const result = await p;
+    assert.deepEqual(result, { ack: 'ping' });
+  } finally { p1.stop(); conn.close(); await bridge.close(); }
+});
+
+test('close：拨号重试中调用 close，request 以「连接已关闭」拒绝且不留活动连接', async () => {
+  const port = await getFreePort(); // 没有中继 → 拨号必败进入退避重试
+  const conn = new BridgeConnection({ port, commandTimeoutMs: 5000, dialTimeoutMs: 100, backoffMaxMs: 200, logger: () => {} });
+  const p = conn.request({ action: 'ping' }); // 不 await：让其停在拨号重试循环
+  await sleep(120); // 等首轮拨号失败、进入退避
+  conn.close();
+  await assert.rejects(p, /连接已关闭/);
+  assert.equal(conn.ws, null, '不留活动连接');
 });
