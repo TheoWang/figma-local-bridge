@@ -1,0 +1,28 @@
+# npm Trusted Publishing：推送 v* tag 时经 GitHub OIDC 直接发布
+# 无需 npm token、无需 OTP；发布身份绑定 npmjs.com 包 Settings 里的 Trusted Publisher 配置
+# （owner: TheoWang / repo: figma-local-bridge / workflow 文件名: publish.yml）
+name: npm publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  id-token: write # OIDC 身份令牌：trusted publishing 与 provenance 依赖它
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+      - name: 确保 npm >= 11.5.1（trusted publishing 最低版本）
+        run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm test
+      - run: npm publish --provenance # --provenance 在 npm 页面显示 GitHub Actions 构建来源
