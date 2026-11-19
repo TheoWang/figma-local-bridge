@@ -1,0 +1,33 @@
+# OIDC 调试：打印 GitHub 发给 npm 的 OIDC 声明，用于核对 Trusted Publisher 配置。
+# 用完可删（或保留作发布排查工具）。
+name: oidc-debug
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC 身份令牌
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 解码 OIDC 令牌声明
+        shell: bash
+        run: |
+          set -e
+          RESP=$(curl -s "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+          TOKEN=$(echo "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin)['value'])")
+          PAYLOAD=$(echo "$TOKEN" | cut -d. -f2)
+          python3 - "$PAYLOAD" <<'EOF'
+          import sys, json, base64
+          p = sys.argv[1]
+          p += '=' * (-len(p) % 4)
+          d = json.loads(base64.urlsafe_b64decode(p))
+          keys = ['repository', 'repository_owner', 'repository_owner_id',
+                  'ref', 'ref_type', 'workflow', 'job_workflow_ref',
+                  'runner_environment', 'iss', 'aud']
+          print(json.dumps({k: d.get(k) for k in keys}, indent=2, ensure_ascii=False))
+          EOF
