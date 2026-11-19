@@ -2,6 +2,7 @@
 // Figma Local Bridge CLI
 // 子命令：
 //   server                        启动本地中继（前台运行）
+//   mcp                           启动 MCP stdio server（供 AI 代理接入）
 //   send '<json>' | send @file    发送一条命令并打印结果
 //   render <file.json>            渲染节点树文件（send @file 的别名）
 //   export <nodeId> [scale]       导出节点为 PNG/SVG，落盘 ./exports/
@@ -145,6 +146,9 @@ async function main() {
     case 'server':
       require(path.join(__dirname, '..', 'src', 'server.js')).start();
       break;
+    case 'mcp':
+      require(path.join(__dirname, '..', 'src', 'mcp', 'main.js')).start();
+      break;
     case 'send': {
       const { args: rest, selector } = takeFileArg(args);
       await cmdSend(rest[0], selector);
@@ -171,7 +175,7 @@ async function main() {
       await cmdDoctor();
       break;
     default:
-      console.log('用法：figma-bridge <server|send|render|export|list-files|install-plugin|doctor>');
+      console.log('用法：figma-bridge <server|mcp|send|render|export|list-files|install-plugin|doctor>');
       process.exit(cmd ? 2 : 0);
   }
 }
