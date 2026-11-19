@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- 新增 `figma-bridge mcp`：MCP stdio server，16 个自描述工具（list_files / ping / list_pages / create_page / goto_page / get_structure / inspect_node / render / update / remove / export_node / place_image / import_svg / set_image_fill / make_component / link）
+- 中继自动拉起：MCP server 启动探测 9741，不在线自动 spawn 中继子进程，退出时回收
+- `export_node` 返回 MCP 图片内容并落盘 exports/；`place_image`/`set_image_fill` 收本地图片路径；`import_svg` 复用 sharp 栅格化
+- CLI 与 MCP 共享 file 选择器与 SVG 栅格化（新增 `src/relay-client.js`），CLI 行为不变
+- 升级动作：`install-plugin` 并重启插件（插件仅版本常量同步至 0.3.0）
+
 ## 0.2.3（2026-11-02）
 
 渐变 stops 读取修复（修复用户反馈「渐变 stops 不可读」）：

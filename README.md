@@ -32,6 +32,25 @@ npx figma-bridge install-plugin       # 把插件安装到 ~/figma-local-bridge-
 
 自检：`npx figma-bridge doctor`（中继连通性 / 插件在线 / 版本一致性）。
 
+## MCP 接入（AI 代理）
+
+`figma-bridge mcp` 是标准 MCP stdio server：把插件命令暴露为 16 个自描述工具（渲染/读取/导出/组件/原型连线），AI 无需读文档即可拼对参数。特色：
+
+- **图片内联**：`export_node` 直接返回 PNG 图片内容（AI 立即看到画布），同时落盘 `exports/`
+- **本地路径输入**：`place_image`/`set_image_fill`/`import_svg` 直接收本地图片路径，无需 base64
+- **自动拉起中继**：启动时探测 9741 端口，中继不在线则自动拉起；MCP 客户端退出时回收自己拉起的中继
+- **多文件**：所有工具支持 `file` 参数（fileKey 或文件名唯一子串），语义与 CLI `--file` 一致
+
+MCP 客户端配置示例（ZCode / Claude Desktop / Cursor 同格式）：
+
+```json
+{ "mcpServers": { "figma": { "command": "npx", "args": ["figma-bridge", "mcp"] } } }
+```
+
+> 插件侧仍需按 [插件安装与配置指南](docs/plugin-setup.md) 装好并在目标文件中运行（中继与插件不变）。
+
+MCP 与 CLI 的分工：**MCP 给 AI 代理**（schema 自描述、图片直接可见、工具级权限）；**CLI 给人**调试与脚本（`doctor`/`send`/`install-plugin`）。
+
 ## 命令
 
 ```bash

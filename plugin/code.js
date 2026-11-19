@@ -3,7 +3,7 @@
 // 端口与中继一致（默认 9741）；如需改端口，两处同步修改。
 
 var SERVER = 'http://localhost:9741';
-var PLUGIN_VERSION = '0.2.3';
+var PLUGIN_VERSION = '0.3.0';
 var instanceId = Math.random().toString(36).slice(2, 8);
 var sessionId = null;
 var fileKey = (typeof figma.fileKey === 'string' && figma.fileKey) || ('name:' + figma.root.name);
