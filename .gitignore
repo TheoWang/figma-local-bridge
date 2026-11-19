@@ -3,3 +3,5 @@ exports/
 .DS_Store
 *.log
 .env
+.worktrees/
+.superpowers/sdd/
