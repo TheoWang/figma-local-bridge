@@ -14,6 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
+const { resolveFileKey, rasterizeSvgToPlaceImage } = require('../src/relay-client');
 
 const PORT = Number(process.env.FLB_PORT || 9741);
 const PKG_VERSION = require(path.join(__dirname, '..', 'package.json')).version;
@@ -44,31 +45,6 @@ function readCommand(arg) {
   return JSON.parse(arg.startsWith('@') ? fs.readFileSync(arg.slice(1), 'utf8') : arg);
 }
 
-async function rasterizeSvgCommand(command) {
-  const p = (command && command.params) || {};
-  if (!p.svg) throw new Error('importSvg 缺少 svg 参数');
-  let sharp;
-  try {
-    sharp = require('sharp');
-  } catch {
-    throw new Error('importSvg 需要可选依赖 sharp（npm i sharp）');
-  }
-  const w = p.width || 24;
-  const h = p.height || 24;
-  const SCALE = 4;
-  const svg = p.svg
-    .replace(/width="[^"]*"/, `width="${w * SCALE}"`)
-    .replace(/height="[^"]*"/, `height="${h * SCALE}"`);
-  const png = await sharp(Buffer.from(svg), { density: 300 }).png().toBuffer();
-  return {
-    action: 'placeImage',
-    params: {
-      imageBase64: png.toString('base64'),
-      width: w, height: h, name: p.name, parentNodeId: p.parentNodeId, x: p.x, y: p.y, scaleMode: 'FIT'
-    }
-  };
-}
-
 // 从参数里摘除 --file <选择器>，返回剩余参数与选择器（选择器为 fileKey 或文件名唯一子串）
 function takeFileArg(args) {
   const i = args.indexOf('--file');
@@ -80,30 +56,18 @@ function takeFileArg(args) {
   return { args: rest, selector };
 }
 
-// 解析选择器为唯一 fileKey：先精确匹配 fileKey，再大小写不敏感匹配文件名唯一子串。
-// 模糊匹配只在 CLI 层做——解析出 fileKey 后注入 target，中继协议只认 fileKey
-async function resolveFileKey(selector) {
+// CLI 版 fetchStatus：一次性 sendOne 拉 __status
+async function fetchStatusCli() {
   const reply = await sendOne({ action: '__status' }, { allowOffline: true });
-  const sessions = ((reply.result && reply.result.sessions) || []).filter((s) => s.alive);
-  const exact = sessions.filter((s) => s.fileKey === selector);
-  if (exact.length >= 1) {
-    // 该 fileKey 有活会话即投递：多个会话时取最近活跃（对齐中继 pickTargetSession 路由语义）
-    exact.sort((a, b) => new Date(b.lastSeenAt || 0) - new Date(a.lastSeenAt || 0));
-    return exact[0].fileKey;
-  }
-  const lower = String(selector).toLowerCase();
-  const fuzzy = sessions.filter((s) => (s.fileName || '').toLowerCase().includes(lower));
-  if (fuzzy.length === 1) return fuzzy[0].fileKey;
-  if (!fuzzy.length) throw new Error(`没有匹配的在线文件：${selector}（用 figma-bridge list-files 查看）`);
-  throw new Error(`「${selector}」匹配到多个文件：${fuzzy.map((s) => `${s.fileName}（${s.fileKey}）`).join('、')}，请改用 fileKey`);
+  return reply.result;
 }
 
 async function cmdSend(arg, selector) {
   let command = readCommand(arg);
-  if (command.action === 'importSvg') command = await rasterizeSvgCommand(command);
+  if (command.action === 'importSvg') command = await rasterizeSvgToPlaceImage(command.params);
   // --file 注入直接覆盖 command.target（用户在 JSON 里手写 target 时以 --file 为准）
   if (selector) {
-    command.target = { fileKey: await resolveFileKey(selector) };
+    command.target = { fileKey: await resolveFileKey(fetchStatusCli, selector) };
   }
   const reply = await sendOne(command);
   // 导出命令：base64 落盘
